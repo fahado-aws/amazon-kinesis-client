@@ -32,6 +32,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
+import software.amazon.kinesis.common.StreamConfig;
+import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseCoordinator;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
@@ -48,6 +50,7 @@ import software.amazon.kinesis.metrics.MetricsFactory;
 import software.amazon.kinesis.metrics.MetricsLevel;
 import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsUtil;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
 import static software.amazon.kinesis.common.CommonCalculations.getRenewerTakerIntervalMillis;
 
@@ -194,14 +197,57 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
             final long initialLeaseTableReadCapacity,
             final long initialLeaseTableWriteCapacity,
             final MetricsFactory metricsFactory) {
+        this(leaseRefresher, workerIdentifier, leaseDurationMillis,
+            enablePriorityLeaseAssignment, epsilonMillis, maxLeasesForWorker,
+            maxLeasesToStealAtOneTime, maxLeaseRenewerThreadCount,
+            initialLeaseTableReadCapacity, initialLeaseTableWriteCapacity, metricsFactory,
+            null, null);
+    }
+    /**
+     * Constructor.
+     *
+     * @param leaseRefresher
+     *            LeaseRefresher instance to use
+     * @param workerIdentifier
+     *            Identifies the worker (e.g. useful to track lease ownership)
+     * @param leaseDurationMillis
+     *            Duration of a lease
+     * @param enablePriorityLeaseAssignment
+     *            Whether to enable priority lease assignment for very expired leases
+     * @param epsilonMillis
+     *            Allow for some variance when calculating lease expirations
+     * @param maxLeasesForWorker
+     *            Max leases this Worker can handle at a time
+     * @param maxLeasesToStealAtOneTime
+     *            Steal up to these many leases at a time (for load balancing)
+     * @param initialLeaseTableReadCapacity
+     *            Initial dynamodb lease table read iops if creating the lease table
+     * @param initialLeaseTableWriteCapacity
+     *            Initial dynamodb lease table write iops if creating the lease table
+     * @param metricsFactory
+     *            Used to publish metrics about lease operations
+     */
+    public DynamoDBLeaseCoordinator(final LeaseRefresher leaseRefresher,
+            final String workerIdentifier,
+            final long leaseDurationMillis,
+            final boolean enablePriorityLeaseAssignment,
+            final long epsilonMillis,
+            final int maxLeasesForWorker,
+            final int maxLeasesToStealAtOneTime,
+            final int maxLeaseRenewerThreadCount,
+            final long initialLeaseTableReadCapacity,
+            final long initialLeaseTableWriteCapacity,
+            final MetricsFactory metricsFactory,
+            final StreamProcessingMode streamProcessingMode,
+            final Map<StreamIdentifier, StreamConfig> streamConfigMap) {
         this.leaseRefresher = leaseRefresher;
         this.leaseRenewalThreadpool = getLeaseRenewalExecutorService(maxLeaseRenewerThreadCount);
         this.leaseTaker = new DynamoDBLeaseTaker(leaseRefresher, workerIdentifier, leaseDurationMillis, metricsFactory)
                 .withMaxLeasesForWorker(maxLeasesForWorker)
                 .withMaxLeasesToStealAtOneTime(maxLeasesToStealAtOneTime)
                 .withEnablePriorityLeaseAssignment(enablePriorityLeaseAssignment);
-        this.leaseRenewer = new DynamoDBLeaseRenewer(
-                leaseRefresher, workerIdentifier, leaseDurationMillis, leaseRenewalThreadpool, metricsFactory);
+        this.leaseRenewer = new DynamoDBLeaseRenewer(leaseRefresher, workerIdentifier, leaseDurationMillis,
+            leaseRenewalThreadpool, metricsFactory, streamProcessingMode, streamConfigMap);
         this.renewerIntervalMillis = getRenewerTakerIntervalMillis(leaseDurationMillis, epsilonMillis);
         this.takerIntervalMillis = (leaseDurationMillis + epsilonMillis) * 2;
         if (initialLeaseTableReadCapacity <= 0) {
@@ -291,7 +337,7 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
     }
 
     @Override
-    public void runLeaseTaker() throws DependencyException, InvalidStateException {
+    public void runLeaseTaker() throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         MetricsScope scope = MetricsUtil.createMetricsWithOperation(metricsFactory, "TakeLeases");
         long startTime = System.currentTimeMillis();
         boolean success = false;

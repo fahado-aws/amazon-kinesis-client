@@ -277,9 +277,11 @@ class PeriodicShardSyncManager {
     private Map<StreamIdentifier, List<Lease>> getStreamToLeasesMap(
             final Set<StreamIdentifier> streamIdentifiersToFilter)
             throws DependencyException, ProvisionedThroughputException, InvalidStateException {
-        final List<Lease> leases = leaseRefresher.listLeases();
+        final List<Lease> leases = leaseRefresher.listLeases();        
         if (!isMultiStreamingMode) {
             Validate.isTrue(streamIdentifiersToFilter.size() == 1);
+            // TODO: We may want to validate if stream information in lease records matches the 
+            // provided stream
             return Collections.singletonMap(streamIdentifiersToFilter.iterator().next(), leases);
         } else {
             final Map<StreamIdentifier, List<Lease>> streamToLeasesMap = new HashMap<>();

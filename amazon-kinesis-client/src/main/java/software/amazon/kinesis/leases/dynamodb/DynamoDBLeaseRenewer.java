@@ -35,7 +35,9 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
+import software.amazon.awssdk.utils.Validate;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
+import software.amazon.kinesis.common.StreamConfig;
 import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseRefresher;
@@ -48,6 +50,7 @@ import software.amazon.kinesis.metrics.MetricsFactory;
 import software.amazon.kinesis.metrics.MetricsLevel;
 import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsUtil;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
 /**
  * An implementation of {@link LeaseRenewer} that uses DynamoDB via {@link LeaseRefresher}.
@@ -63,6 +66,8 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
     private final long leaseDurationNanos;
     private final ExecutorService executorService;
     private final MetricsFactory metricsFactory;
+    private final StreamProcessingMode streamProcessingMode;
+    private final Map<StreamIdentifier, StreamConfig> streamConfigMap;
 
     private final ConcurrentNavigableMap<String, Lease> ownedLeases = new ConcurrentSkipListMap<>();
 
@@ -86,6 +91,33 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
         this.leaseDurationNanos = TimeUnit.MILLISECONDS.toNanos(leaseDurationMillis);
         this.executorService = executorService;
         this.metricsFactory = metricsFactory;
+        this.streamProcessingMode = StreamProcessingMode.SINGLE_STREAM_MODE;
+        this.streamConfigMap = new HashMap<>();
+    }
+
+    /**
+     * Constructor.
+     *
+     * @param leaseRefresher
+     *            LeaseRefresher to use
+     * @param workerIdentifier
+     *            identifier of this worker
+     * @param leaseDurationMillis
+     *            duration of a lease in milliseconds
+     * @param executorService
+     *            ExecutorService to use for renewing leases in parallel
+     */
+    public DynamoDBLeaseRenewer(final LeaseRefresher leaseRefresher, final String workerIdentifier,
+            final long leaseDurationMillis, final ExecutorService executorService,
+            final MetricsFactory metricsFactory, final StreamProcessingMode streamProcessingMode,
+            final Map<StreamIdentifier, StreamConfig> streamConfigMap) {
+        this.leaseRefresher = leaseRefresher;
+        this.workerIdentifier = workerIdentifier;
+        this.leaseDurationNanos = TimeUnit.MILLISECONDS.toNanos(leaseDurationMillis);
+        this.executorService = executorService;
+        this.metricsFactory = metricsFactory;
+        this.streamProcessingMode = streamProcessingMode;
+        this.streamConfigMap = streamConfigMap;
     }
 
     /**
@@ -352,9 +384,13 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
 
     /**
      * {@inheritDoc}
+     * @throws InvalidStateException 
+     * @throws ProvisionedThroughputException 
+     * @throws DependencyException 
      */
     @Override
-    public void addLeasesToRenew(Collection<Lease> newLeases) {
+    public void addLeasesToRenew(Collection<Lease> newLeases) throws DependencyException, ProvisionedThroughputException, 
+        InvalidStateException {
         verifyNotNull(newLeases, "newLeases cannot be null");
 
         for (Lease lease : newLeases) {
@@ -364,14 +400,29 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
                 continue;
             }
 
-            Lease authoritativeLease = lease.copy();
+            log.info("addLeasesToRenew - Checking stream processing mode: {}", streamProcessingMode);
+            if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE 
+                && !(lease instanceof MultiStreamLease)) {
+                MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
+                if (leaseRefresher.replaceLease(lease, multiStreamLease)) {
+                    multiStreamLease.concurrencyToken(UUID.randomUUID());
+                    ownedLeases.put(multiStreamLease.leaseKey(), multiStreamLease);
+                    ownedLeases.remove(lease.leaseKey());
+                } else {
+                    log.warn("Worker {} ignoring single-stream lease: {} because it could not be " + 
+                        "replaced with multi-stream lease: {}", workerIdentifier, lease, multiStreamLease);
+                }
+                
+            } else {
+                Lease authoritativeLease = lease.copy();
 
-            /*
-             * Assign a concurrency token when we add this to the set of currently owned leases. This ensures that
-             * every time we acquire a lease, it gets a new concurrency token.
-             */
-            authoritativeLease.concurrencyToken(UUID.randomUUID());
-            ownedLeases.put(authoritativeLease.leaseKey(), authoritativeLease);
+                /*
+                * Assign a concurrency token when we add this to the set of currently owned leases. This ensures that
+                * every time we acquire a lease, it gets a new concurrency token.
+                */
+                authoritativeLease.concurrencyToken(UUID.randomUUID());
+                ownedLeases.put(authoritativeLease.leaseKey(), authoritativeLease);
+            }
         }
     }
 
@@ -409,7 +460,19 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
                 // continue renewing a lease after signaling a lease loss to the application.
 
                 if (renewLease(lease, renewEvenIfExpired)) {
-                    myLeases.add(lease);
+                    log.info("initialize - Checking stream processing mode: {}", streamProcessingMode);
+                    if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE 
+                        && !(lease instanceof MultiStreamLease)) {
+                        MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
+                        if (leaseRefresher.replaceLease(lease, multiStreamLease)) {
+                            myLeases.add(multiStreamLease);
+                        } else {
+                            log.warn("Worker {} ignoring single-stream lease: {} because it could not be " + 
+                                "replaced with multi-stream lease: {}", workerIdentifier, lease, multiStreamLease);
+                        }
+                    } else {
+                        myLeases.add(lease);
+                    }
                 }
             } else {
                 log.debug("Worker {} ignoring lease {} ", workerIdentifier, lease);
@@ -424,5 +487,20 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
             throw new IllegalArgumentException(message);
         }
     }
+
+    private MultiStreamLease convertToMultiStreamLease(Lease lease) 
+            throws DependencyException, ProvisionedThroughputException, InvalidStateException {
+        log.info("replaceWithMultiStreamLease - Start");
+        Validate.isTrue(streamConfigMap.size() == 1, "Lease cannot be converted to MultiStream" 
+            + " format when more than one stream is provided");
+        StreamConfig streamConfig = streamConfigMap.values().iterator().next();
+        MultiStreamLease multiStreamLease = new MultiStreamLease(lease, 
+            MultiStreamLease.getLeaseKey(streamConfig.streamIdentifier().serialize(), lease.leaseKey()), 
+            streamConfig.streamIdentifier().serialize(), lease.leaseKey());
+        multiStreamLease.streamIdentifier(streamConfig.streamIdentifier().serialize());
+        multiStreamLease.shardId(lease.leaseKey());     
+        return multiStreamLease;
+    }
+
 
 }

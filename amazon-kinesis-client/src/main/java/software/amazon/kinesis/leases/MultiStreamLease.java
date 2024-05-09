@@ -41,6 +41,22 @@ public class MultiStreamLease extends Lease {
         shardId(other.shardId);
     }
 
+    /**
+     * Constructor to instantiate a MultiStreamLease from a single stream Lease
+     * @param lease lease in the single stream lease format
+     * @param leaseKey new lease key for the MultiStreamLease
+     * @param streamIdentifier streamIdentifier field that is only used in a MultiStreamLease
+     * @param shardId shardId field that is only used in a MultiStreamLease
+     */
+    public MultiStreamLease(Lease lease, String leaseKey, String streamIdentifier, String shardId) {
+        super(leaseKey, lease.leaseOwner(), lease.leaseCounter(), lease.concurrencyToken(),
+                lease.lastCounterIncrementNanos(), lease.checkpoint(), lease.pendingCheckpoint(),
+                lease.ownerSwitchesSinceCheckpoint(), lease.parentShardIds(), lease.childShardIds(),
+                lease.pendingCheckpointState(), lease.hashKeyRangeForLease());
+        streamIdentifier(streamIdentifier);
+        shardId(shardId);
+    }
+
     @Override
     public void update(Lease other) {
         MultiStreamLease casted = validateAndCast(other);

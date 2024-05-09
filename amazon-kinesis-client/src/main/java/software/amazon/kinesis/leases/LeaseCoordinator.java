@@ -49,8 +49,9 @@ public interface LeaseCoordinator {
      *
      * @throws InvalidStateException
      * @throws DependencyException
+     * @throws ProvisionedThroughputException 
      */
-    void runLeaseTaker() throws DependencyException, InvalidStateException;
+    void runLeaseTaker() throws DependencyException, InvalidStateException, ProvisionedThroughputException;
 
     /**
      * Runs a single iteration of the lease renewer - used by integration tests.

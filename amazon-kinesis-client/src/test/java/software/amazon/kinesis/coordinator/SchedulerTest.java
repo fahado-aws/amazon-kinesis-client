@@ -1389,6 +1389,12 @@ public class SchedulerTest {
         }
 
         @Override
+        public LeaseCoordinator createLeaseCoordinator(MetricsFactory metricsFactory, Map<StreamIdentifier, 
+                StreamConfig> streamConfigMap) {
+            return leaseCoordinator;
+        }
+
+        @Override
         public ShardSyncTaskManager createShardSyncTaskManager(MetricsFactory metricsFactory) {
             return shardSyncTaskManager;
         }
@@ -1433,6 +1439,12 @@ public class SchedulerTest {
 
         @Override
         public LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory) {
+            return leaseCleanupManager;
+        }
+
+        @Override
+        public LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory, 
+                Map<StreamIdentifier, StreamConfig> streamConfigMap) {
             return leaseCleanupManager;
         }
     }

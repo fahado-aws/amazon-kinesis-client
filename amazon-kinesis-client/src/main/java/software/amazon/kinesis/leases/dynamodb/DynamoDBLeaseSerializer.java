@@ -36,6 +36,7 @@ import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.leases.DynamoUtils;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseSerializer;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.UpdateField;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
@@ -58,6 +59,9 @@ public class DynamoDBLeaseSerializer implements LeaseSerializer {
     private static final String CHILD_SHARD_IDS_KEY = "childShardIds";
     private static final String STARTING_HASH_KEY = "startingHashKey";
     private static final String ENDING_HASH_KEY = "endingHashKey";
+    // Fields for multistream lease
+    private static final String STREAM_ID_KEY = "streamName";
+    private static final String SHARD_ID_KEY = "shardId";
 
     @Override
     public Map<String, AttributeValue> toDynamoRecord(final Lease lease) {
@@ -94,12 +98,21 @@ public class DynamoDBLeaseSerializer implements LeaseSerializer {
             result.put(ENDING_HASH_KEY, DynamoUtils.createAttributeValue(lease.hashKeyRangeForLease().serializedEndingHashKey()));
         }
 
+        // Additionally add Multistream lease fields if included
+        if (lease instanceof MultiStreamLease) {
+            final MultiStreamLease multiStreamLease = (MultiStreamLease) lease;
+            result.put(STREAM_ID_KEY, DynamoUtils.createAttributeValue(multiStreamLease.streamIdentifier()));
+            result.put(SHARD_ID_KEY, DynamoUtils.createAttributeValue(multiStreamLease.shardId()));
+        }
+
         return result;
     }
 
     @Override
     public Lease fromDynamoRecord(final Map<String, AttributeValue> dynamoRecord) {
-        final Lease result = new Lease();
+        // Use multiStream lease format if record has stream ID as a field
+        final boolean isMultiStreamLease = null != DynamoUtils.safeGetString(dynamoRecord, STREAM_ID_KEY);        
+        final Lease result = isMultiStreamLease ? new MultiStreamLease() : new Lease();
         return fromDynamoRecord(dynamoRecord, result);
     }
 
@@ -132,6 +145,12 @@ public class DynamoDBLeaseSerializer implements LeaseSerializer {
         if (!Strings.isNullOrEmpty(startingHashKey = DynamoUtils.safeGetString(dynamoRecord, STARTING_HASH_KEY))
                 && !Strings.isNullOrEmpty(endingHashKey = DynamoUtils.safeGetString(dynamoRecord, ENDING_HASH_KEY))) {
             leaseToUpdate.hashKeyRange(HashKeyRangeForLease.deserialize(startingHashKey, endingHashKey));
+        }
+
+        if (leaseToUpdate instanceof MultiStreamLease) {
+            final MultiStreamLease multiStreamLease = (MultiStreamLease) leaseToUpdate;
+            multiStreamLease.streamIdentifier(DynamoUtils.safeGetString(dynamoRecord, STREAM_ID_KEY));
+            multiStreamLease.shardId(DynamoUtils.safeGetString(dynamoRecord, SHARD_ID_KEY));
         }
 
         return leaseToUpdate;
@@ -280,6 +299,13 @@ public class DynamoDBLeaseSerializer implements LeaseSerializer {
         if (lease.hashKeyRangeForLease() != null) {
             result.put(STARTING_HASH_KEY, putUpdate(DynamoUtils.createAttributeValue(lease.hashKeyRangeForLease().serializedStartingHashKey())));
             result.put(ENDING_HASH_KEY, putUpdate(DynamoUtils.createAttributeValue(lease.hashKeyRangeForLease().serializedEndingHashKey())));
+        }
+
+        // Additionally add Multistream lease fields if included
+        if (lease instanceof MultiStreamLease) {
+            final MultiStreamLease multiStreamLease = (MultiStreamLease) lease;
+            result.put(STREAM_ID_KEY, putUpdate(DynamoUtils.createAttributeValue(multiStreamLease.streamIdentifier())));
+            result.put(SHARD_ID_KEY, putUpdate(DynamoUtils.createAttributeValue(multiStreamLease.shardId())));
         }
 
         return result;
