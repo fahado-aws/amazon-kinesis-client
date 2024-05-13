@@ -22,6 +22,7 @@ import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -68,11 +69,14 @@ import software.amazon.awssdk.services.dynamodb.model.TableStatus;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.Tag;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsResponse;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
 import software.amazon.kinesis.leases.LeaseSerializer;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
 
@@ -103,6 +107,8 @@ public class DynamoDBLeaseRefresherTest {
     private CompletableFuture<DescribeTableResponse> mockDescribeTableFuture;
     @Mock
     private CompletableFuture<CreateTableResponse> mockCreateTableFuture;
+    @Mock
+    private CompletableFuture<TransactWriteItemsResponse> mockTransactWriteItemsFuture;
     @Mock
     private Lease lease;
 
@@ -524,6 +530,20 @@ public class DynamoDBLeaseRefresherTest {
         when(mockCreateTableFuture.get(anyLong(), any())).thenThrow(te);
 
         verifyCancel(mockCreateTableFuture, () -> leaseRefresher.createLeaseTableIfNotExists());
+    }
+
+    @Test
+    public void testReplaceLeaseTimesOut() throws Exception {
+        TimeoutException te = setRuleForDependencyTimeout();
+        Lease newLease = mock(MultiStreamLease.class);
+
+        when(dynamoDbClient.transactWriteItems(any(TransactWriteItemsRequest.class))).thenReturn(mockTransactWriteItemsFuture);
+        when(mockTransactWriteItemsFuture.get(anyLong(), any())).thenThrow(te);
+
+        when(leaseSerializer.toDynamoRecord(any())).thenReturn(serializedLease);
+        when(leaseSerializer.getDynamoNonexistantExpectation()).thenReturn(Collections.emptyMap());
+
+        verifyCancel(mockTransactWriteItemsFuture, () -> leaseRefresher.replaceLease(lease, newLease));
     }
 
     @FunctionalInterface

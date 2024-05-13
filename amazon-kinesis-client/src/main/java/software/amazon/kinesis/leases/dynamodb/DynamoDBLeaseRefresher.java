@@ -54,6 +54,7 @@ import software.amazon.awssdk.services.dynamodb.model.TableStatus;
 import software.amazon.awssdk.services.dynamodb.model.Tag;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.utils.CollectionUtils;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
@@ -750,8 +751,9 @@ public class DynamoDBLeaseRefresher implements LeaseRefresher {
             } catch (InterruptedException e) {
                 throw new DependencyException(e);
             }
-        } catch (ConditionalCheckFailedException e) {
-            log.debug("Did not create lease {} because it already existed", newLease);
+        } catch (TransactionCanceledException e) {
+            log.warn("Failed to delete lease: {} and create lease: {} because of reasons: {}", 
+                oldLease, newLease, e.cancellationReasons());
             return false;
         } catch (DynamoDbException | TimeoutException e) {
             throw convertAndRethrowExceptions("create", newLease.leaseKey(), e);
