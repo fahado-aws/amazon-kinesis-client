@@ -118,6 +118,9 @@ import software.amazon.kinesis.processor.FormerStreamsLeasesDeletionStrategy.Pro
 import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.ProcessorConfig;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
+import software.amazon.kinesis.processor.SingleStreamCompatibleTracker;
+import software.amazon.kinesis.processor.SingleStreamUpgradeTracker;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.processor.ShardRecordProcessor;
 import software.amazon.kinesis.retrieval.RecordsPublisher;
 import software.amazon.kinesis.retrieval.RetrievalConfig;
@@ -353,6 +356,42 @@ public class SchedulerTest {
                 .forEach(shardDetector -> verify(shardDetector, times(1)).listShards());
         shardSyncTaskManagerMap.values()
                 .forEach(shardSyncTM -> verify(shardSyncTM, times(1)).hierarchicalShardSyncer());
+        assertEquals(true, scheduler.isMultiStreamMode());
+        assertEquals(StreamProcessingMode.MULTI_STREAM_MODE, scheduler.streamProcessingMode());
+    }
+
+    @Test
+    public final void testSchedulerInstantiationInSingleStreamCompatibleMode() {
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier, 
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        SingleStreamCompatibleTracker singleStreamCompatibleTracker = new SingleStreamCompatibleTracker(streamIdentifier, streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, singleStreamCompatibleTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        leaseManagementConfig = new LeaseManagementConfig(tableName, dynamoDBClient, kinesisClient,
+                                                          workerIdentifier).leaseManagementFactory(new TestKinesisLeaseManagementFactory(true, true));
+        scheduler = new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig);
+        assertEquals(false, scheduler.isMultiStreamMode());
+        assertEquals(StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE, scheduler.streamProcessingMode());
+    }
+
+    @Test
+    public final void testSchedulerInstantiationInSingleStreamUpgradeMode() {
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier, 
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        SingleStreamUpgradeTracker singleStreamUpgradeTracker = new SingleStreamUpgradeTracker(streamIdentifier, streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, singleStreamUpgradeTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        leaseManagementConfig = new LeaseManagementConfig(tableName, dynamoDBClient, kinesisClient,
+                                                          workerIdentifier).leaseManagementFactory(new TestKinesisLeaseManagementFactory(true, true));
+        scheduler = new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig);
+        assertEquals(false, scheduler.isMultiStreamMode());
+        assertEquals(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE, scheduler.streamProcessingMode());
     }
 
     @Test
