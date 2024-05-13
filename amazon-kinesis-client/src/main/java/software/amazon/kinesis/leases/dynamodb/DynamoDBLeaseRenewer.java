@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.StringUtils;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -116,6 +118,10 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
         this.leaseDurationNanos = TimeUnit.MILLISECONDS.toNanos(leaseDurationMillis);
         this.executorService = executorService;
         this.metricsFactory = metricsFactory;
+        if (StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == streamProcessingMode) {
+            Validate.isTrue(streamConfigMap.size() == 1, "Lease cannot be converted to MultiStream" 
+                + " format when more than one stream is provided");
+        }
         this.streamProcessingMode = streamProcessingMode;
         this.streamConfigMap = streamConfigMap;
     }
@@ -488,11 +494,8 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
         }
     }
 
-    private MultiStreamLease convertToMultiStreamLease(Lease lease) 
-            throws DependencyException, ProvisionedThroughputException, InvalidStateException {
-        log.info("replaceWithMultiStreamLease - Start");
-        Validate.isTrue(streamConfigMap.size() == 1, "Lease cannot be converted to MultiStream" 
-            + " format when more than one stream is provided");
+    @VisibleForTesting
+    MultiStreamLease convertToMultiStreamLease(Lease lease) {
         StreamConfig streamConfig = streamConfigMap.values().iterator().next();
         MultiStreamLease multiStreamLease = new MultiStreamLease(lease, 
             MultiStreamLease.getLeaseKey(streamConfig.streamIdentifier().serialize(), lease.leaseKey()), 
