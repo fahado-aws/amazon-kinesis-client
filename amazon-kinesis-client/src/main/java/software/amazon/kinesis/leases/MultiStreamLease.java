@@ -21,9 +21,15 @@ import lombok.NoArgsConstructor;
 import lombok.NonNull;
 import lombok.Setter;
 import lombok.experimental.Accessors;
+import software.amazon.kinesis.common.HashKeyRangeForLease;
+import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
+
 import org.apache.commons.lang3.Validate;
 
 import static com.google.common.base.Verify.verifyNotNull;
+
+import java.util.Set;
+import java.util.UUID;
 
 @Setter
 @NoArgsConstructor
@@ -53,6 +59,20 @@ public class MultiStreamLease extends Lease {
                 lease.lastCounterIncrementNanos(), lease.checkpoint(), lease.pendingCheckpoint(),
                 lease.ownerSwitchesSinceCheckpoint(), lease.parentShardIds(), lease.childShardIds(),
                 lease.pendingCheckpointState(), lease.hashKeyRangeForLease());
+        streamIdentifier(streamIdentifier);
+        shardId(shardId);
+    }
+
+    public MultiStreamLease(String leaseKey, String leaseOwner, Long leaseCounter,
+    UUID concurrencyToken, Long lastCounterIncrementNanos,
+    ExtendedSequenceNumber checkpoint, ExtendedSequenceNumber pendingCheckpoint,
+    Long ownerSwitchesSinceCheckpoint, Set<String> parentShardIds, Set<String> childShardIds,
+    byte[] pendingCheckpointState, HashKeyRangeForLease hashKeyRangeForLease, 
+    String streamIdentifier, String shardId) {
+        super(leaseKey, leaseOwner, leaseCounter, concurrencyToken,
+                lastCounterIncrementNanos, checkpoint, pendingCheckpoint,
+                ownerSwitchesSinceCheckpoint, parentShardIds, childShardIds,
+                pendingCheckpointState, hashKeyRangeForLease);
         streamIdentifier(streamIdentifier);
         shardId(shardId);
     }
