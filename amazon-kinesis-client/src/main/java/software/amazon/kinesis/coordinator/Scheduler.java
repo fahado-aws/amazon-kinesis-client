@@ -625,7 +625,7 @@ public class Scheduler implements Runnable {
 
     @VisibleForTesting
     boolean shouldSyncStreamsNow() {
-        return StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode &&
+        return isMultiStreamMode &&
                 (streamSyncWatch.elapsed(TimeUnit.MILLISECONDS) > NEW_STREAM_CHECK_INTERVAL_MILLIS);
     }
 
@@ -1049,7 +1049,7 @@ public class Scheduler implements Runnable {
         if (streamIdentifierString.isPresent()) {
             streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierString.get());
         } else {
-            Validate.isTrue(StreamProcessingMode.MULTI_STREAM_MODE != streamProcessingMode, "Should not be in MultiStream Mode");
+            Validate.isTrue(!isMultiStreamMode, "Should not be in MultiStream Mode");
             streamIdentifier = this.currentStreamConfigMap.values().iterator().next().streamIdentifier();
         }
         Validate.notNull(streamIdentifier, "Stream identifier should not be empty");
