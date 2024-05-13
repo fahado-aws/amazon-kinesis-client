@@ -96,6 +96,10 @@ public class HierarchicalShardSyncer {
         this(isMultiStreamMode, streamIdentifier, null);
     }
 
+    public HierarchicalShardSyncer(final StreamProcessingMode streamProcessingMode, final String streamIdentifier) {
+        this(streamProcessingMode, streamIdentifier, null);
+    }
+
     public HierarchicalShardSyncer(final boolean isMultiStreamMode, final String streamIdentifier,
             final DeletedStreamListProvider deletedStreamListProvider) {
         this(isMultiStreamMode ? StreamProcessingMode.MULTI_STREAM_MODE : StreamProcessingMode.SINGLE_STREAM_MODE,
