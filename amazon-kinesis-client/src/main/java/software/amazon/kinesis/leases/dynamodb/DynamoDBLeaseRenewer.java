@@ -466,19 +466,7 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
                 // continue renewing a lease after signaling a lease loss to the application.
 
                 if (renewLease(lease, renewEvenIfExpired)) {
-                    log.info("initialize - Checking stream processing mode: {}", streamProcessingMode);
-                    if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE 
-                        && !(lease instanceof MultiStreamLease)) {
-                        MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
-                        if (leaseRefresher.replaceLease(lease, multiStreamLease)) {
-                            myLeases.add(multiStreamLease);
-                        } else {
-                            log.warn("Worker {} ignoring single-stream lease: {} because it could not be " + 
-                                "replaced with multi-stream lease: {}", workerIdentifier, lease, multiStreamLease);
-                        }
-                    } else {
-                        myLeases.add(lease);
-                    }
+                    myLeases.add(lease);
                 }
             } else {
                 log.debug("Worker {} ignoring lease {} ", workerIdentifier, lease);
