@@ -252,7 +252,7 @@ public class Scheduler implements Runnable {
         this.maxInitializationAttempts = this.coordinatorConfig.maxInitializationAttempts();
         this.metricsFactory = this.metricsConfig.metricsFactory();
 
-        final LeaseSerializer leaseSerializer = new DynamoDBLeaseSerializer();
+        final LeaseSerializer leaseSerializer = new DynamoDBLeaseSerializer(streamProcessingMode);
         this.leaseCoordinator = this.leaseManagementConfig
                 .leaseManagementFactory(leaseSerializer, streamProcessingMode)
                 .createLeaseCoordinator(this.metricsFactory, currentStreamConfigMap);
