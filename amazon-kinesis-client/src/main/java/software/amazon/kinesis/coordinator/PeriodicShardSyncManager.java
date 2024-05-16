@@ -28,6 +28,7 @@ import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.awssdk.services.kinesis.model.Shard;
 import software.amazon.awssdk.utils.CollectionUtils;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
+import software.amazon.kinesis.checkpoint.SentinelCheckpoint;
 import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.common.StreamConfig;
 import software.amazon.kinesis.common.StreamIdentifier;
@@ -120,7 +121,7 @@ class PeriodicShardSyncManager {
             Function<StreamConfig, ShardSyncTaskManager> shardSyncTaskManagerProvider,
             Map<StreamConfig, ShardSyncTaskManager> streamToShardSyncTaskManagerMap,
             MetricsFactory metricsFactory, long leasesRecoveryAuditorExecutionFrequencyMillis,
-            int leasesRecoveryAuditorInconsistencyConfidenceThreshold, AtomicBoolean leaderSynced, 
+            int leasesRecoveryAuditorInconsistencyConfidenceThreshold, AtomicBoolean leaderSynced,
             StreamProcessingMode streamProcessingMode){
         this(workerId, leaderDecider, leaseRefresher, currentStreamConfigMap, shardSyncTaskManagerProvider,
                 streamToShardSyncTaskManagerMap,
@@ -139,7 +140,7 @@ class PeriodicShardSyncManager {
             int leasesRecoveryAuditorInconsistencyConfidenceThreshold,
             AtomicBoolean leaderSynced) {
         this(workerId, leaderDecider, leaseRefresher, currentStreamConfigMap, shardSyncTaskManagerProvider, streamToShardSyncTaskManagerMap,
-            shardSyncThreadPool, isMultiStreamingMode, metricsFactory, leasesRecoveryAuditorExecutionFrequencyMillis, 
+            shardSyncThreadPool, isMultiStreamingMode, metricsFactory, leasesRecoveryAuditorExecutionFrequencyMillis,
             leasesRecoveryAuditorInconsistencyConfidenceThreshold, leaderSynced,
             isMultiStreamingMode ? StreamProcessingMode.MULTI_STREAM_MODE : StreamProcessingMode.SINGLE_STREAM_MODE);
     }
@@ -313,47 +314,49 @@ class PeriodicShardSyncManager {
         int numSingleStreamLeases = 0;
         int numMultiStreamLeases = 0;
         try {
-            final List<Lease> leases = leaseRefresher.listLeases();      
+            final List<Lease> leases = leaseRefresher.listLeases();
             final Map<StreamIdentifier, List<Lease>> streamToLeasesMap = new HashMap<>();
             if (isMultiStreamingMode) {
                 for (Lease lease : leases) {
+                    boolean isActiveLease = SentinelCheckpoint.SHARD_END.toString().equals(lease.checkpoint().sequenceNumber());
                     if (lease instanceof MultiStreamLease) {
-                        numMultiStreamLeases += 1;
+                        numMultiStreamLeases += isActiveLease ? 1 : 0;
                         StreamIdentifier streamIdentifier = StreamIdentifier
                         .multiStreamInstance(((MultiStreamLease) lease).streamIdentifier());
                         if (streamIdentifiersToFilter.contains(streamIdentifier)) {
                             streamToLeasesMap.computeIfAbsent(streamIdentifier, s -> new ArrayList<>()).add(lease);
                         }
                     } else {
-                        numSingleStreamLeases += 1;
-                        numIncompatibleLeases += 1;
-                    }                                
+                        numSingleStreamLeases += isActiveLease ? 1 : 0;
+                        numIncompatibleLeases += isActiveLease ? 1 : 0;
+                    }
                 }
             } else {
                 Validate.isTrue(streamIdentifiersToFilter.size() == 1);
                 StreamIdentifier singleStreamIdentifier = streamIdentifiersToFilter.iterator().next();
                 ArrayList<Lease> singleStreamLeases = new ArrayList<>();
-                for (Lease lease : leases) {                    
+                for (Lease lease : leases) {
+                    boolean isActiveLease = !SentinelCheckpoint.SHARD_END.toString().equals(lease.checkpoint().sequenceNumber());
                     if (lease instanceof MultiStreamLease) {
-                        numMultiStreamLeases += 1;
+                        numMultiStreamLeases += isActiveLease ? 1 : 0;
                         if (StreamProcessingMode.SINGLE_STREAM_MODE == streamProcessingMode) {
-                            numIncompatibleLeases += 1;
+                            numIncompatibleLeases += isActiveLease ? 1 : 0;
                         } else {
                             MultiStreamLease multiStreamLease = (MultiStreamLease) lease;
                             if (singleStreamIdentifier.serialize().equals(multiStreamLease.streamIdentifier())) {
                                 singleStreamLeases.add(lease);
                             } else {
-                                numIncompatibleLeases += 1;
+                                numIncompatibleLeases += isActiveLease ? 1 : 0;
                             }
                         }
                     } else {
-                        numSingleStreamLeases += 1;
+                        numSingleStreamLeases += isActiveLease ? 1 : 0;
                         singleStreamLeases.add(lease);
                     }
                 }
                 streamToLeasesMap.put(singleStreamIdentifier, singleStreamLeases);
-            } 
-            return streamToLeasesMap;            
+            }
+            return streamToLeasesMap;
         } finally {
             scope.addData("NumIncompatibleLeases", numIncompatibleLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
             scope.addData("NumSingleStreamLeases", numSingleStreamLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
