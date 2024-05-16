@@ -96,9 +96,10 @@ public class HierarchicalShardSyncerTest {
     private static final boolean MULTISTREAM_MODE_ON = true;
     private static final String STREAM_IDENTIFIER = "123456789012:stream:1";
     private static final HierarchicalShardSyncer.MultiStreamArgs MULTI_STREAM_ARGS = new HierarchicalShardSyncer.MultiStreamArgs(
-            MULTISTREAM_MODE_ON, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
-    private static final HierarchicalShardSyncer.MultiStreamLeaseArgs SINGLE_STREAM_UPGRADE_MODE_ARGS = 
-        new HierarchicalShardSyncer.MultiStreamLeaseArgs(true, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
+            StreamProcessingMode.MULTI_STREAM_MODE, MULTISTREAM_MODE_ON, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
+    private static final HierarchicalShardSyncer.MultiStreamArgs SINGLE_STREAM_UPGRADE_MODE_ARGS =
+        new HierarchicalShardSyncer.MultiStreamArgs(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE, true,
+        StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
 
     /**
      * <pre>
@@ -238,7 +239,7 @@ public class HierarchicalShardSyncerTest {
     }
 
         /**
-     * Test determineNewLeasesToCreate() where there are no leases and no resharding operations have been performed 
+     * Test determineNewLeasesToCreate() where there are no leases and no resharding operations have been performed
      * in SingleStreamUpgradeMode
      */
     @Test
@@ -2457,7 +2458,7 @@ public class HierarchicalShardSyncerTest {
                 .parentShards(parentShards)
                 .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
                 .build();
-        
+
         Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.singleStreamInstance("stream"));
 
         assertTrue(lease instanceof Lease);
@@ -2474,7 +2475,7 @@ public class HierarchicalShardSyncerTest {
                 .parentShards(parentShards)
                 .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
                 .build();
-        
+
         Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.singleStreamInstance("stream"));
 
         assertTrue(lease instanceof Lease);
@@ -2491,7 +2492,7 @@ public class HierarchicalShardSyncerTest {
                 .parentShards(parentShards)
                 .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
                 .build();
-        
+
         Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
 
         assertTrue(lease instanceof Lease);
@@ -2508,7 +2509,7 @@ public class HierarchicalShardSyncerTest {
                 .parentShards(parentShards)
                 .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
                 .build();
-        
+
         Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
 
         assertTrue(lease instanceof Lease);

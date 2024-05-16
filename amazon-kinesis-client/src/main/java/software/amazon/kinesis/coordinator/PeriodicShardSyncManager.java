@@ -45,6 +45,7 @@ import software.amazon.kinesis.metrics.MetricsFactory;
 import software.amazon.kinesis.metrics.MetricsLevel;
 import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsUtil;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
 import java.io.Serializable;
 import java.math.BigInteger;
@@ -96,6 +97,7 @@ class PeriodicShardSyncManager {
     private final int leasesRecoveryAuditorInconsistencyConfidenceThreshold;
     @Getter(AccessLevel.NONE)
     private final AtomicBoolean leaderSynced;
+    private final StreamProcessingMode streamProcessingMode;
     private boolean isRunning;
 
     PeriodicShardSyncManager(String workerId, LeaderDecider leaderDecider, LeaseRefresher leaseRefresher,
@@ -117,11 +119,40 @@ class PeriodicShardSyncManager {
             Map<StreamIdentifier, StreamConfig> currentStreamConfigMap,
             Function<StreamConfig, ShardSyncTaskManager> shardSyncTaskManagerProvider,
             Map<StreamConfig, ShardSyncTaskManager> streamToShardSyncTaskManagerMap,
+            MetricsFactory metricsFactory, long leasesRecoveryAuditorExecutionFrequencyMillis,
+            int leasesRecoveryAuditorInconsistencyConfidenceThreshold, AtomicBoolean leaderSynced, 
+            StreamProcessingMode streamProcessingMode){
+        this(workerId, leaderDecider, leaseRefresher, currentStreamConfigMap, shardSyncTaskManagerProvider,
+                streamToShardSyncTaskManagerMap,
+                Executors.newSingleThreadScheduledExecutor(), StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode, metricsFactory,
+                leasesRecoveryAuditorExecutionFrequencyMillis, leasesRecoveryAuditorInconsistencyConfidenceThreshold,
+                leaderSynced, streamProcessingMode);
+    }
+
+    PeriodicShardSyncManager(String workerId, LeaderDecider leaderDecider, LeaseRefresher leaseRefresher,
+            Map<StreamIdentifier, StreamConfig> currentStreamConfigMap,
+            Function<StreamConfig, ShardSyncTaskManager> shardSyncTaskManagerProvider,
+            Map<StreamConfig, ShardSyncTaskManager> streamToShardSyncTaskManagerMap,
             ScheduledExecutorService shardSyncThreadPool, boolean isMultiStreamingMode,
             MetricsFactory metricsFactory,
             long leasesRecoveryAuditorExecutionFrequencyMillis,
             int leasesRecoveryAuditorInconsistencyConfidenceThreshold,
             AtomicBoolean leaderSynced) {
+        this(workerId, leaderDecider, leaseRefresher, currentStreamConfigMap, shardSyncTaskManagerProvider, streamToShardSyncTaskManagerMap,
+            shardSyncThreadPool, isMultiStreamingMode, metricsFactory, leasesRecoveryAuditorExecutionFrequencyMillis, 
+            leasesRecoveryAuditorInconsistencyConfidenceThreshold, leaderSynced,
+            isMultiStreamingMode ? StreamProcessingMode.MULTI_STREAM_MODE : StreamProcessingMode.SINGLE_STREAM_MODE);
+    }
+
+    PeriodicShardSyncManager(String workerId, LeaderDecider leaderDecider, LeaseRefresher leaseRefresher,
+            Map<StreamIdentifier, StreamConfig> currentStreamConfigMap,
+            Function<StreamConfig, ShardSyncTaskManager> shardSyncTaskManagerProvider,
+            Map<StreamConfig, ShardSyncTaskManager> streamToShardSyncTaskManagerMap,
+            ScheduledExecutorService shardSyncThreadPool, boolean isMultiStreamingMode,
+            MetricsFactory metricsFactory,
+            long leasesRecoveryAuditorExecutionFrequencyMillis,
+            int leasesRecoveryAuditorInconsistencyConfidenceThreshold,
+            AtomicBoolean leaderSynced, StreamProcessingMode streamProcessingMode) {
         Validate.notBlank(workerId, "WorkerID is required to initialize PeriodicShardSyncManager.");
         Validate.notNull(leaderDecider, "LeaderDecider is required to initialize PeriodicShardSyncManager.");
         this.workerId = workerId;
@@ -136,6 +167,7 @@ class PeriodicShardSyncManager {
         this.leasesRecoveryAuditorExecutionFrequencyMillis = leasesRecoveryAuditorExecutionFrequencyMillis;
         this.leasesRecoveryAuditorInconsistencyConfidenceThreshold = leasesRecoveryAuditorInconsistencyConfidenceThreshold;
         this.leaderSynced = leaderSynced;
+        this.streamProcessingMode = streamProcessingMode;
     }
 
     public synchronized TaskResult start() {
@@ -199,7 +231,7 @@ class PeriodicShardSyncManager {
                 final Set<StreamIdentifier> streamConfigMap = new HashSet<>(currentStreamConfigMap.keySet());
 
                 // Construct the stream to leases map to be used in the lease sync
-                final Map<StreamIdentifier, List<Lease>> streamToLeasesMap = getStreamToLeasesMap(streamConfigMap);
+                final Map<StreamIdentifier, List<Lease>> streamToLeasesMap = getStreamToLeasesMap(streamConfigMap, scope);
 
                 // For each of the stream, check if shard sync needs to be done based on the leases state.
                 for (StreamIdentifier streamIdentifier : streamConfigMap) {
@@ -275,24 +307,57 @@ class PeriodicShardSyncManager {
      * @throws InvalidStateException
      */
     private Map<StreamIdentifier, List<Lease>> getStreamToLeasesMap(
-            final Set<StreamIdentifier> streamIdentifiersToFilter)
+            final Set<StreamIdentifier> streamIdentifiersToFilter, MetricsScope scope)
             throws DependencyException, ProvisionedThroughputException, InvalidStateException {
-        final List<Lease> leases = leaseRefresher.listLeases();        
-        if (!isMultiStreamingMode) {
-            Validate.isTrue(streamIdentifiersToFilter.size() == 1);
-            // TODO: We may want to validate if stream information in lease records matches the 
-            // provided stream
-            return Collections.singletonMap(streamIdentifiersToFilter.iterator().next(), leases);
-        } else {
+        int numIncompatibleLeases = 0;
+        int numSingleStreamLeases = 0;
+        int numMultiStreamLeases = 0;
+        try {
+            final List<Lease> leases = leaseRefresher.listLeases();      
             final Map<StreamIdentifier, List<Lease>> streamToLeasesMap = new HashMap<>();
-            for (Lease lease : leases) {
-                StreamIdentifier streamIdentifier = StreamIdentifier
+            if (isMultiStreamingMode) {
+                for (Lease lease : leases) {
+                    if (lease instanceof MultiStreamLease) {
+                        numMultiStreamLeases += 1;
+                        StreamIdentifier streamIdentifier = StreamIdentifier
                         .multiStreamInstance(((MultiStreamLease) lease).streamIdentifier());
-                if (streamIdentifiersToFilter.contains(streamIdentifier)) {
-                    streamToLeasesMap.computeIfAbsent(streamIdentifier, s -> new ArrayList<>()).add(lease);
+                        if (streamIdentifiersToFilter.contains(streamIdentifier)) {
+                            streamToLeasesMap.computeIfAbsent(streamIdentifier, s -> new ArrayList<>()).add(lease);
+                        }
+                    } else {
+                        numSingleStreamLeases += 1;
+                        numIncompatibleLeases += 1;
+                    }                                
                 }
-            }
-            return streamToLeasesMap;
+            } else {
+                Validate.isTrue(streamIdentifiersToFilter.size() == 1);
+                StreamIdentifier singleStreamIdentifier = streamIdentifiersToFilter.iterator().next();
+                ArrayList<Lease> singleStreamLeases = new ArrayList<>();
+                for (Lease lease : leases) {                    
+                    if (lease instanceof MultiStreamLease) {
+                        numMultiStreamLeases += 1;
+                        if (StreamProcessingMode.SINGLE_STREAM_MODE == streamProcessingMode) {
+                            numIncompatibleLeases += 1;
+                        } else {
+                            MultiStreamLease multiStreamLease = (MultiStreamLease) lease;
+                            if (singleStreamIdentifier.serialize().equals(multiStreamLease.streamIdentifier())) {
+                                singleStreamLeases.add(lease);
+                            } else {
+                                numIncompatibleLeases += 1;
+                            }
+                        }
+                    } else {
+                        numSingleStreamLeases += 1;
+                        singleStreamLeases.add(lease);
+                    }
+                }
+                streamToLeasesMap.put(singleStreamIdentifier, singleStreamLeases);
+            } 
+            return streamToLeasesMap;            
+        } finally {
+            scope.addData("NumIncompatibleLeases", numIncompatibleLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+            scope.addData("NumSingleStreamLeases", numSingleStreamLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+            scope.addData("NumMultiStreamLeases", numMultiStreamLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
         }
     }
 
