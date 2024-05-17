@@ -1,22 +1,19 @@
 package software.amazon.kinesis.config;
 
+import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.URISyntaxException;
+import java.net.UnknownHostException;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import lombok.Builder;
 import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.arns.Arn;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
-import software.amazon.kinesis.common.FutureUtils;
-import software.amazon.kinesis.common.InitialPositionInStreamExtended;
-import software.amazon.kinesis.common.StreamConfig;
-import software.amazon.kinesis.common.StreamIdentifier;
-import software.amazon.kinesis.processor.FormerStreamsLeasesDeletionStrategy;
-import software.amazon.kinesis.processor.MultiStreamTracker;
-import software.amazon.kinesis.processor.SingleStreamTracker;
-import software.amazon.kinesis.retrieval.RetrievalConfig;
-import software.amazon.kinesis.retrieval.fanout.FanOutConfig;
-import software.amazon.kinesis.retrieval.polling.PollingConfig;
-import software.amazon.kinesis.utils.RecordValidatorQueue;
-import software.amazon.kinesis.utils.ReshardOptions;
-import software.amazon.kinesis.application.TestRecordProcessorFactory;
-import lombok.Builder;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.http.Protocol;
@@ -27,26 +24,31 @@ import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClientBuilder;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder;
 import software.amazon.awssdk.services.kinesis.model.DescribeStreamSummaryRequest;
 import software.amazon.awssdk.services.kinesis.model.DescribeStreamSummaryResponse;
 import software.amazon.awssdk.services.sts.StsAsyncClient;
 import software.amazon.awssdk.utils.AttributeMap;
+import software.amazon.kinesis.application.TestRecordProcessorFactory;
 import software.amazon.kinesis.common.ConfigsBuilder;
+import software.amazon.kinesis.common.FutureUtils;
 import software.amazon.kinesis.common.InitialPositionInStream;
+import software.amazon.kinesis.common.InitialPositionInStreamExtended;
+import software.amazon.kinesis.common.StreamConfig;
+import software.amazon.kinesis.common.StreamIdentifier;
+import software.amazon.kinesis.processor.FormerStreamsLeasesDeletionStrategy;
+import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
-
-import java.io.IOException;
-import java.net.Inet4Address;
-import java.net.URISyntaxException;
-import java.net.UnknownHostException;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-import lombok.extern.slf4j.Slf4j;
+import software.amazon.kinesis.processor.SingleStreamTracker;
+import software.amazon.kinesis.processor.StreamTracker;
+import software.amazon.kinesis.retrieval.RetrievalConfig;
+import software.amazon.kinesis.retrieval.fanout.FanOutConfig;
+import software.amazon.kinesis.retrieval.polling.PollingConfig;
+import software.amazon.kinesis.utils.RecordValidatorQueue;
+import software.amazon.kinesis.utils.ReshardOptions;
 
 /**
  * Default configuration for a producer or consumer used in integration tests.
@@ -67,6 +69,7 @@ public abstract class KCLAppConfig {
     private StsAsyncClient stsAsyncClientForConsumer;
     private KinesisAsyncClient kinesisAsyncClientForStreamOwner;
     private StsAsyncClient stsAsyncClientForStreamOwner;
+    private DynamoDbClient dynamoDbClient;
     private DynamoDbAsyncClient dynamoDbAsyncClient;
     private CloudWatchAsyncClient cloudWatchAsyncClient;
     private RecordValidatorQueue recordValidator;
@@ -85,6 +88,10 @@ public abstract class KCLAppConfig {
         } else {
             return this.streamNames;
         }
+    }
+
+    public StreamTracker getStreamTracker(Map<Arn, Arn> streamToConsumerArnsMap) {
+        return null;
     }
 
     public abstract String getTestName();
@@ -236,6 +243,15 @@ public abstract class KCLAppConfig {
                 .build();
     }
 
+    public final DynamoDbClient buildDynamoDbClient() throws IOException {
+        if (this.dynamoDbClient == null) {
+            final DynamoDbClientBuilder builder = DynamoDbClient.builder().region(getRegion());
+            builder.credentialsProvider(getCredentialsProvider());
+            this.dynamoDbClient = builder.build();
+        }
+        return this.dynamoDbClient;
+    }
+
     public final DynamoDbAsyncClient buildAsyncDynamoDbClient() throws IOException {
         if (this.dynamoDbAsyncClient == null) {
             final DynamoDbAsyncClientBuilder builder = DynamoDbAsyncClient.builder().region(getRegion());
@@ -258,7 +274,7 @@ public abstract class KCLAppConfig {
         return Inet4Address.getLocalHost().getHostName();
     }
 
-    public final RecordValidatorQueue getRecordValidator() {
+    public RecordValidatorQueue getRecordValidator() {
         if (recordValidator == null) {
             this.recordValidator = new RecordValidatorQueue();
         }
@@ -269,10 +285,19 @@ public abstract class KCLAppConfig {
         return new TestRecordProcessorFactory(getRecordValidator());
     }
 
-    public final ConfigsBuilder getConfigsBuilder(Map<Arn, Arn> streamToConsumerArnsMap)
+    public final ConfigsBuilder getConfigsBuilder(Map<Arn, Arn> streamToConsumerArnsMap) throws IOException, URISyntaxException {
+        return getConfigsBuilder(streamToConsumerArnsMap, "");
+    }
+
+    public final ConfigsBuilder getConfigsBuilder(Map<Arn, Arn> streamToConsumerArnsMap, String workerIdSuffix)
             throws IOException, URISyntaxException {
-        final String workerId = getWorkerId();
-        if (getStreamArns().size() == 1) {
+        final String workerId = getWorkerId() + workerIdSuffix;
+        final StreamTracker streamTracker = getStreamTracker(streamToConsumerArnsMap);
+        if (streamTracker != null) {
+            return new ConfigsBuilder(streamTracker, getApplicationName(),
+                    buildAsyncKinesisClientForConsumer(), buildAsyncDynamoDbClient(), buildAsyncCloudWatchClient(), workerId,
+                    getShardRecordProcessorFactory());
+        } else if (getStreamArns().size() == 1) {
             final SingleStreamTracker singleStreamTracker = new SingleStreamTracker(
                     StreamIdentifier.singleStreamInstance(getStreamArns().get(0)),
                     buildStreamConfigList(streamToConsumerArnsMap).get(0));
@@ -315,7 +340,7 @@ public abstract class KCLAppConfig {
         }).collect(Collectors.toList());
     }
 
-    private long getCreationEpoch(Arn streamArn) {
+    protected long getCreationEpoch(Arn streamArn) {
         final DescribeStreamSummaryRequest request = DescribeStreamSummaryRequest.builder()
                 .streamARN(streamArn.toString())
                 .build();
