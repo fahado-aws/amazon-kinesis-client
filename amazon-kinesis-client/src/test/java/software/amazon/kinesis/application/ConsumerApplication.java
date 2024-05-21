@@ -75,6 +75,10 @@ public class ConsumerApplication {
         }
     }
 
+    public Boolean isTerminated() {
+        return this.scheduler == null || this.scheduler.shutdownComplete();
+    }
+
     private void setUpConsumerResources(Map<Arn, Arn> streamToConsumerArnsMap) throws Exception {
         // Setup configuration of KCL (including DynamoDB and CloudWatch)
         final ConfigsBuilder configsBuilder = consumerConfig.getConfigsBuilder(streamToConsumerArnsMap, workerIdSuffix);
