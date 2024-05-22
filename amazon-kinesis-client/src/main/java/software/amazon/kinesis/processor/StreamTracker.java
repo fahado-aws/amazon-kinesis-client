@@ -82,4 +82,55 @@ public interface StreamTracker {
      */
     boolean isMultiStream();
 
+    public enum StreamProcessingMode {
+        /**
+         * KCL application is processing a single stream.
+         * All leases belong to the one stream being processed which is
+         * provided to the KCL configuration.
+         * Therefore KCL uses an efficient lease structure by not persisting
+         * stream identifier into DDB Lease table.
+         */
+        SINGLE_STREAM_MODE,
+
+        /**
+         * This is essentially same as SINGLE_STREAM_MODE, however
+         * is the phase 1 change to make to smoothly upgrade to
+         * MULTI_STREAM_MODE. KCL application
+         * in this mode will be compatible with both lease structures
+         * used by the SINGLE_STREAM_MODE and the MULTI_STREAM_MODE
+         * operation
+         */
+        SINGLE_STREAM_COMPATIBLE_MODE,
+
+        /**
+         * This is also essentially same as SINGLE_STREAM_MODE where KCL
+         * processes a single stream for the application. However this
+         * wold be the phase 2 change to make to smoothly upgrade to
+         */
+        SINGLE_STREAM_UPGRADE_MODE,
+
+        /**
+         * KCL application is processing multiple streams, therefore
+         * KCL uses a detailed lease structure to store in DDB to coordinate
+         * stream consumption which can identify which lease belongs
+         * to which stream, by persisting the stream identifier for each
+         * lease in DDB.
+         */
+        MULTI_STREAM_MODE
+    }
+
+    /**
+     * Returns the stream processing mode in which the application
+     * will run. This will determine how the application will handle
+     * the different lease record formats.
+     * @return StreamProcessingMode
+     */
+    default StreamProcessingMode streamProcessingMode() {
+        if (isMultiStream()) {
+            return StreamProcessingMode.MULTI_STREAM_MODE;
+        }
+
+        return StreamProcessingMode.SINGLE_STREAM_MODE;
+    }
+
 }
