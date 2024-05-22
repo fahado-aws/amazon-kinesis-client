@@ -338,4 +338,40 @@ public class DynamoDBLeaseRefresherIntegrationTest extends LeaseIntegrationTest 
         verify(tableCreatorCallback).performAction(
                 eq(TableCreatorCallbackInput.builder().dynamoDbClient(ddbClient).tableName(tableName).build()));
     }
+
+    @Test
+    public void testReplaceLease() throws LeasingException {
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        Lease oldLease = builder.withLease("1").build().get("1");
+        Lease newLease = new Lease("2", oldLease.leaseOwner(), oldLease.leaseCounter(), oldLease.concurrencyToken(),
+        oldLease.lastCounterIncrementNanos(), oldLease.checkpoint(), oldLease.pendingCheckpoint(),
+        oldLease.ownerSwitchesSinceCheckpoint(), oldLease.parentShardIds(), oldLease.childShardIds(),
+        oldLease.pendingCheckpointState(), oldLease.hashKeyRangeForLease());
+
+        leaseRefresher.replaceLease(oldLease, newLease);
+
+        Lease persistedOldLease = leaseRefresher.getLease(oldLease.leaseKey());
+        assertNull(persistedOldLease);
+        Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
+        assertEquals(newLease, persistedNewLease);
+    }
+
+    @Test
+    public void testReplaceLease_ThrowsError_WhenLeaseAlreadyExists() throws LeasingException {
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        Lease oldLease = builder.withLease("1").build().get("1");
+        Lease existingNewLease = builder.withLease("2").build().get("2");
+        Lease newLease = new Lease("2", oldLease.leaseOwner(), oldLease.leaseCounter(), oldLease.concurrencyToken(),
+        oldLease.lastCounterIncrementNanos(), oldLease.checkpoint(), oldLease.pendingCheckpoint(),
+        oldLease.ownerSwitchesSinceCheckpoint(), oldLease.parentShardIds(), oldLease.childShardIds(),
+        oldLease.pendingCheckpointState(), oldLease.hashKeyRangeForLease());
+
+        boolean result = leaseRefresher.replaceLease(oldLease, newLease);
+
+        assertFalse(result);
+        Lease persistedOldLease = leaseRefresher.getLease(oldLease.leaseKey());
+        assertEquals(oldLease, persistedOldLease);
+        Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
+        assertEquals(existingNewLease, persistedNewLease);
+    }
 }
