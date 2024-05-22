@@ -73,7 +73,6 @@ import software.amazon.kinesis.leases.ShardPrioritization;
 import software.amazon.kinesis.leases.ShardSyncTaskManager;
 import software.amazon.kinesis.leases.dynamodb.DynamoDBLeaseCoordinator;
 import software.amazon.kinesis.leases.dynamodb.DynamoDBLeaseSerializer;
-import software.amazon.kinesis.leases.dynamodb.DynamoDBMultiStreamLeaseSerializer;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
@@ -95,6 +94,7 @@ import software.amazon.kinesis.processor.ProcessorConfig;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
 import software.amazon.kinesis.processor.ShutdownNotificationAware;
 import software.amazon.kinesis.processor.StreamTracker;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.AggregatorUtil;
 import software.amazon.kinesis.retrieval.RecordsPublisher;
 import software.amazon.kinesis.retrieval.RetrievalConfig;
@@ -158,6 +158,7 @@ public class Scheduler implements Runnable {
     private final long taskBackoffTimeMillis;
     private final boolean isMultiStreamMode;
     private final Map<StreamIdentifier, StreamConfig> currentStreamConfigMap = new StreamConfigMap();
+    private final StreamProcessingMode streamProcessingMode;
     private final StreamTracker streamTracker;
     private final FormerStreamsLeasesDeletionStrategy formerStreamsLeasesDeletionStrategy;
     private final long listShardsBackoffTimeMillis;
@@ -241,6 +242,8 @@ public class Scheduler implements Runnable {
         this.applicationName = this.coordinatorConfig.applicationName();
         this.streamTracker = retrievalConfig.streamTracker();
         this.isMultiStreamMode = streamTracker.isMultiStream();
+        this.streamProcessingMode = streamTracker.streamProcessingMode();
+        log.info("Stream Processing Mode: {}", streamProcessingMode);
         this.formerStreamsLeasesDeletionStrategy = streamTracker.formerStreamsLeasesDeletionStrategy();
         streamTracker.streamConfigList().forEach(
                 sc -> currentStreamConfigMap.put(sc.streamIdentifier(), sc));
@@ -248,13 +251,11 @@ public class Scheduler implements Runnable {
 
         this.maxInitializationAttempts = this.coordinatorConfig.maxInitializationAttempts();
         this.metricsFactory = this.metricsConfig.metricsFactory();
-        // Determine leaseSerializer based on availability of MultiStreamTracker.
-        final LeaseSerializer leaseSerializer = isMultiStreamMode ?
-                new DynamoDBMultiStreamLeaseSerializer() :
-                new DynamoDBLeaseSerializer();
+
+        final LeaseSerializer leaseSerializer = new DynamoDBLeaseSerializer(streamProcessingMode);
         this.leaseCoordinator = this.leaseManagementConfig
-                .leaseManagementFactory(leaseSerializer, isMultiStreamMode)
-                .createLeaseCoordinator(this.metricsFactory);
+                .leaseManagementFactory(leaseSerializer, streamProcessingMode)
+                .createLeaseCoordinator(this.metricsFactory, currentStreamConfigMap);
         this.leaseRefresher = this.leaseCoordinator.leaseRefresher();
 
         //
@@ -273,7 +274,7 @@ public class Scheduler implements Runnable {
         this.diagnosticEventHandler = new DiagnosticEventLogger();
         this.deletedStreamListProvider = new DeletedStreamListProvider();
         this.shardSyncTaskManagerProvider = streamConfig -> this.leaseManagementConfig
-                .leaseManagementFactory(leaseSerializer, isMultiStreamMode)
+                .leaseManagementFactory(leaseSerializer, streamProcessingMode)
                 .createShardSyncTaskManager(this.metricsFactory, streamConfig, this.deletedStreamListProvider);
         this.shardPrioritization = this.coordinatorConfig.shardPrioritization();
         this.cleanupLeasesUponShardCompletion = this.leaseManagementConfig.cleanupLeasesUponShardCompletion();
@@ -305,12 +306,12 @@ public class Scheduler implements Runnable {
         this.schedulerInitializationBackoffTimeMillis = this.coordinatorConfig.schedulerInitializationBackoffTimeMillis();
         this.leaderElectedPeriodicShardSyncManager = new PeriodicShardSyncManager(
                 leaseManagementConfig.workerIdentifier(), leaderDecider, leaseRefresher, currentStreamConfigMap,
-                shardSyncTaskManagerProvider, streamToShardSyncTaskManagerMap, isMultiStreamMode, metricsFactory,
+                shardSyncTaskManagerProvider, streamToShardSyncTaskManagerMap, metricsFactory,
                 leaseManagementConfig.leasesRecoveryAuditorExecutionFrequencyMillis(),
                 leaseManagementConfig.leasesRecoveryAuditorInconsistencyConfidenceThreshold(),
-                leaderSynced);
-        this.leaseCleanupManager = this.leaseManagementConfig.leaseManagementFactory(leaseSerializer, isMultiStreamMode)
-                .createLeaseCleanupManager(metricsFactory);
+                leaderSynced, streamProcessingMode);
+        this.leaseCleanupManager = this.leaseManagementConfig.leaseManagementFactory(leaseSerializer, streamProcessingMode)
+                .createLeaseCleanupManager(metricsFactory, currentStreamConfigMap);
         this.schemaRegistryDecoder =
             this.retrievalConfig.glueSchemaRegistryDeserializer() == null ?
                 null

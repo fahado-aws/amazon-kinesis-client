@@ -56,6 +56,7 @@ import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
 import software.amazon.kinesis.metrics.MetricsLevel;
 import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsUtil;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
 import static java.util.Objects.nonNull;
@@ -77,6 +78,10 @@ public class HierarchicalShardSyncer {
 
     private final DeletedStreamListProvider deletedStreamListProvider;
 
+    private final StreamProcessingMode streamProcessingMode;
+
+    private final boolean createMultiStreamLease;
+
     private static final String MIN_HASH_KEY = BigInteger.ZERO.toString();
     private static final String MAX_HASH_KEY = new BigInteger("2").pow(128).subtract(BigInteger.ONE).toString();
     private static final int RETRIES_FOR_COMPLETE_HASH_RANGE = 3;
@@ -91,17 +96,29 @@ public class HierarchicalShardSyncer {
         this(isMultiStreamMode, streamIdentifier, null);
     }
 
+    public HierarchicalShardSyncer(final StreamProcessingMode streamProcessingMode, final String streamIdentifier) {
+        this(streamProcessingMode, streamIdentifier, null);
+    }
+
     public HierarchicalShardSyncer(final boolean isMultiStreamMode, final String streamIdentifier,
             final DeletedStreamListProvider deletedStreamListProvider) {
-        this.isMultiStreamMode = isMultiStreamMode;
-        this.streamIdentifier = streamIdentifier;
-        this.deletedStreamListProvider = deletedStreamListProvider;
+        this(isMultiStreamMode ? StreamProcessingMode.MULTI_STREAM_MODE : StreamProcessingMode.SINGLE_STREAM_MODE,
+            streamIdentifier, deletedStreamListProvider);
     }
 
     private static String getShardIdFromLease(Lease lease, MultiStreamArgs multiStreamArgs) {
-        return multiStreamArgs.isMultiStreamMode()
-            ? ((MultiStreamLease) lease).shardId()
-            : lease.leaseKey();
+        return lease instanceof MultiStreamLease ?
+            ((MultiStreamLease) lease).shardId() :
+            lease.leaseKey();
+    }
+    public HierarchicalShardSyncer(final StreamProcessingMode streamProcessingMode, final String streamIdentifier,
+        final DeletedStreamListProvider deletedStreamListProvider) {
+        this.streamIdentifier = streamIdentifier;
+        this.deletedStreamListProvider = deletedStreamListProvider;
+        this.streamProcessingMode = streamProcessingMode;
+        isMultiStreamMode = StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode;
+        createMultiStreamLease = StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode
+            || StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == streamProcessingMode;
     }
 
     /**
@@ -152,7 +169,8 @@ public class HierarchicalShardSyncer {
         }
         final List<Lease> currentLeases = isMultiStreamMode ?
                 leaseRefresher.listLeasesForStream(shardDetector.streamIdentifier()) : leaseRefresher.listLeases();
-        final MultiStreamArgs multiStreamArgs = new MultiStreamArgs(isMultiStreamMode, shardDetector.streamIdentifier());
+        final MultiStreamArgs multiStreamArgs = new MultiStreamArgs(streamProcessingMode, createMultiStreamLease,
+            shardDetector.streamIdentifier());
         final LeaseSynchronizer leaseSynchronizer = isLeaseTableEmpty ? new EmptyLeaseTableSynchronizer() :
                 new NonEmptyLeaseTableSynchronizer(shardDetector, shardIdToShardMap, shardIdToChildShardIdsMap);
         final List<Lease> newLeasesToCreate = determineNewLeasesToCreate(leaseSynchronizer, latestShards, currentLeases,
@@ -372,7 +390,7 @@ public class HierarchicalShardSyncer {
             final List<Lease> currentLeases, final InitialPositionInStreamExtended initialPosition,
             final Set<String> inconsistentShardIds) {
         return determineNewLeasesToCreate(leaseSynchronizer, shards, currentLeases, initialPosition, inconsistentShardIds,
-                new MultiStreamArgs(false, null));
+                new MultiStreamArgs(null, false, null));
     }
 
     /**
@@ -468,7 +486,7 @@ public class HierarchicalShardSyncer {
                                 if (memoizationContext.shouldCreateLease(parentShardId) ||
                                         !descendantParentShardIds.contains(parentShardId)) {
                                     log.debug("{} : Need to create a lease for shardId {}", streamIdentifier, parentShardId);
-                                    lease = multiStreamArgs.isMultiStreamMode() ?
+                                    lease = multiStreamArgs.createMultiStreamLease() ?
                                             newKCLMultiStreamLease(shardIdToShardMapOfAllKinesisShards.get(parentShardId),
                                                     multiStreamArgs.streamIdentifier()) :
                                             newKCLLease(shardIdToShardMapOfAllKinesisShards.get(parentShardId));
@@ -540,7 +558,7 @@ public class HierarchicalShardSyncer {
             final Map<String, Lease> shardIdToLeaseMapOfNewShards, MemoizationContext memoizationContext) {
         return checkIfDescendantAndAddNewLeasesForAncestors(shardId, initialPosition, shardIdsOfCurrentLeases,
                 shardIdToShardMapOfAllKinesisShards, shardIdToLeaseMapOfNewShards, memoizationContext,
-                new MultiStreamArgs(false, null));
+                new MultiStreamArgs(null, false, null));
     }
 
     /**
@@ -568,10 +586,9 @@ public class HierarchicalShardSyncer {
 
     public synchronized Lease createLeaseForChildShard(final ChildShard childShard,
             final StreamIdentifier streamIdentifier) throws InvalidStateException {
-        final MultiStreamArgs multiStreamArgs = new MultiStreamArgs(isMultiStreamMode, streamIdentifier);
-
-        return multiStreamArgs.isMultiStreamMode() ? newKCLMultiStreamLeaseForChildShard(childShard, streamIdentifier)
-                                                   : newKCLLeaseForChildShard(childShard);
+        return createMultiStreamLease
+               ? newKCLMultiStreamLeaseForChildShard(childShard, streamIdentifier)
+               : newKCLLeaseForChildShard(childShard);
     }
 
     /**
@@ -762,7 +779,8 @@ public class HierarchicalShardSyncer {
     @Accessors(fluent = true)
     @VisibleForTesting
     static class MultiStreamArgs {
-        private final Boolean isMultiStreamMode;
+        private final StreamProcessingMode streamProcessingMode;
+        private final Boolean createMultiStreamLease;
         private final StreamIdentifier streamIdentifier;
     }
 
@@ -835,7 +853,7 @@ public class HierarchicalShardSyncer {
 
             for (Shard shard : shards) {
                 final String shardId = shard.shardId();
-                final Lease lease = multiStreamArgs.isMultiStreamMode() ?
+                final Lease lease = multiStreamArgs.createMultiStreamLease() ?
                         newKCLMultiStreamLease(shard, multiStreamArgs.streamIdentifier) : newKCLLease(shard);
                 lease.checkpoint(convertToCheckpoint(initialPosition));
 
@@ -918,6 +936,21 @@ public class HierarchicalShardSyncer {
                     .map(streamId -> streamId.serialize()).orElse("");
             final Set<String> shardIdsOfCurrentLeases = currentLeases.stream()
                     .peek(lease -> log.debug("{} : Existing lease: {}", streamIdentifier, lease))
+                    .filter(lease -> {
+                        if (lease instanceof MultiStreamLease) {
+                            if (StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE == multiStreamArgs.streamProcessingMode()
+                                || StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == multiStreamArgs.streamProcessingMode()) {
+                                MultiStreamLease multiStreamLease = (MultiStreamLease) lease;
+                                // In compatibility and upgrade mode we make sure that the stream identifier in configuration
+                                // matches the lease stream identifier.
+                                return multiStreamArgs.streamIdentifier.serialize().equals(multiStreamLease.streamIdentifier());
+                            } else {
+                                return true;
+                            }
+                        } else {
+                            return true;
+                        }
+                    })
                     .map(lease -> getShardIdFromLease(lease, multiStreamArgs))
                     .collect(Collectors.toSet());
 
@@ -949,7 +982,7 @@ public class HierarchicalShardSyncer {
                     // SHARD_END of their parents.
                     if (!isDescendant) {
                         log.debug("{} : shardId {} has no ancestors. Creating a lease.", streamIdentifier, shardId);
-                        final Lease newLease = multiStreamArgs.isMultiStreamMode() ?
+                        final Lease newLease = multiStreamArgs.createMultiStreamLease() ?
                                 newKCLMultiStreamLease(shard, multiStreamArgs.streamIdentifier()) :
                                 newKCLLease(shard);
                         newLease.checkpoint(convertToCheckpoint(initialPosition));

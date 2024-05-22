@@ -17,16 +17,20 @@ package software.amazon.kinesis.leases.dynamodb;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Matchers.any;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 
@@ -38,17 +42,23 @@ import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
 import software.amazon.kinesis.common.HashKeyRangeForLease;
+import software.amazon.kinesis.common.InitialPositionInStream;
+import software.amazon.kinesis.common.InitialPositionInStreamExtended;
+import software.amazon.kinesis.common.StreamConfig;
+import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseRefresher;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
 import software.amazon.kinesis.metrics.NullMetricsFactory;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
 @RunWith(MockitoJUnitRunner.class)
 public class DynamoDBLeaseRenewerTest {
-    private final String workerIdentifier = "WorkerId";
-    private final long leaseDurationMillis = 10000;
+    private static final String WORKER_IDENTIFIER = "WorkerId";
+    private static final long LEASE_DURATION_MILLIS = 10000;
     private DynamoDBLeaseRenewer renewer;
     private List<Lease> leasesToRenew;
 
@@ -56,14 +66,20 @@ public class DynamoDBLeaseRenewerTest {
     private LeaseRefresher leaseRefresher;
 
     private static Lease newLease(String leaseKey) {
-        return new Lease(leaseKey, "LeaseOwner", 0L, UUID.randomUUID(), System.nanoTime(), null, null, null,
+        return new Lease(leaseKey, WORKER_IDENTIFIER, 0L, UUID.randomUUID(), System.nanoTime(), null, null, null,
                 new HashSet<>(), new HashSet<>(), null, HashKeyRangeForLease.deserialize("1", "2"));
+    }
+
+    private static Lease newMultiStreamLease(String leaseKey) {
+        return new MultiStreamLease(leaseKey, WORKER_IDENTIFIER, 0L, UUID.randomUUID(), System.nanoTime(), null, null, null,
+                new HashSet<>(), new HashSet<>(), null, HashKeyRangeForLease.deserialize("1", "2"),
+                "stream", "shard-id");
     }
 
     @Before
     public void before() {
         leasesToRenew = null;
-        renewer = new DynamoDBLeaseRenewer(leaseRefresher, workerIdentifier, leaseDurationMillis,
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
                 Executors.newCachedThreadPool(), new NullMetricsFactory());
     }
 
@@ -118,5 +134,138 @@ public class DynamoDBLeaseRenewerTest {
 
         // Clear the list to avoid triggering expectation mismatch in after().
         leasesToRenew.clear();
+    }
+
+    @Test
+    public void testReplacesLeaseInStreamUpgradeMode()
+        throws Exception {
+        // given
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
+            InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
+        streamConfigMap.put(streamIdentifier, streamConfig);
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
+            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            streamConfigMap);
+        /*
+         * Prepare leases to be renewed
+         * 2 Good
+         */
+        Lease lease1 = newLease("1");
+        Lease lease2 = newMultiStreamLease("2");
+        List<Lease> leases = Arrays.asList(lease1, lease2);
+        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        doReturn(true).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        doReturn(true).when(leaseRefresher).renewLease(expectedMultiStreamLease);
+        doReturn(true).when(leaseRefresher).renewLease(lease2);
+
+        // when
+        renewer.addLeasesToRenew(leases);
+
+        renewer.renewLeases();
+
+        // then
+        Map<String, Lease> currentLeases = renewer.getCurrentlyHeldLeases();
+        assertEquals(2, currentLeases.size());
+        verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
+        assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
+    }
+
+    @Test
+    public void testReplacesLeaseInStreamUpgradeModeWhenInitialized()
+        throws Exception {
+        // given
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
+            InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
+        streamConfigMap.put(streamIdentifier, streamConfig);
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
+            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            streamConfigMap);
+        /*
+         * Prepare leases to be renewed
+         * 2 Good
+         */
+        Lease lease1 = newLease("1");
+        Lease lease2 = newMultiStreamLease("2");
+        List<Lease> leases = Arrays.asList(lease1, lease2);
+        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        doReturn(true).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
+        doReturn(leases).when(leaseRefresher).listLeases();
+
+        // when
+        renewer.initialize();
+
+        // then
+        Map<String, Lease> currentLeases = renewer.getCurrentlyHeldLeases();
+        assertEquals(2, currentLeases.size());
+        verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
+        assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
+    }
+
+    @Test
+    public void testInstantiationFailsWhenMoreThanOneStreamIsProvidedInSingleStreamUpgradeMode()
+        throws Exception {
+        // given
+        String streamIdentifierSer1 = "123456789012:TestStream1:12345";
+        StreamIdentifier streamIdentifier1 = StreamIdentifier.multiStreamInstance(streamIdentifierSer1);
+        StreamConfig streamConfig1 = new StreamConfig(streamIdentifier1,
+            InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        String streamIdentifierSer2 = "123456789012:TestStream2:12345";
+            StreamIdentifier streamIdentifier2 = StreamIdentifier.multiStreamInstance(streamIdentifierSer2);
+            StreamConfig streamConfig2 = new StreamConfig(streamIdentifier2,
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
+        streamConfigMap.put(streamIdentifier1, streamConfig1);
+        streamConfigMap.put(streamIdentifier2, streamConfig2);
+
+        // when & then
+        assertThrows(IllegalArgumentException.class,
+            () -> new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
+            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            streamConfigMap));
+    }
+
+    @Test
+    public void testConvertToMultiStreamLease() {
+        // given
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        String shardId = "1";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
+            InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
+        streamConfigMap.put(streamIdentifier, streamConfig);
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
+            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            streamConfigMap);
+        Lease lease = newLease(shardId);
+        String expectedLeaseKey = MultiStreamLease.getLeaseKey(streamIdentifierSer, shardId);
+
+        // when
+        MultiStreamLease multiStreamLease = renewer.convertToMultiStreamLease(lease);
+
+        // then
+        assertEquals(expectedLeaseKey, multiStreamLease.leaseKey());
+        assertEquals(shardId, multiStreamLease.shardId());
+        assertEquals(streamIdentifierSer, multiStreamLease.streamIdentifier());
+        assertEquals(lease.leaseOwner(), multiStreamLease.leaseOwner());
+        assertEquals(lease.leaseCounter(), multiStreamLease.leaseCounter());
+        assertEquals(lease.concurrencyToken(), multiStreamLease.concurrencyToken());
+        assertEquals(lease.lastCounterIncrementNanos(), multiStreamLease.lastCounterIncrementNanos());
+        assertEquals(lease.checkpoint(), multiStreamLease.checkpoint());
+        assertEquals(lease.pendingCheckpoint(), multiStreamLease.pendingCheckpoint());
+        assertEquals(lease.ownerSwitchesSinceCheckpoint(), multiStreamLease.ownerSwitchesSinceCheckpoint());
+        assertEquals(lease.parentShardIds(), multiStreamLease.parentShardIds());
+        assertEquals(lease.childShardIds(), multiStreamLease.childShardIds());
+        assertEquals(lease.pendingCheckpointState(), multiStreamLease.pendingCheckpointState());
+        assertEquals(lease.hashKeyRangeForLease(), multiStreamLease.hashKeyRangeForLease());
     }
 }
