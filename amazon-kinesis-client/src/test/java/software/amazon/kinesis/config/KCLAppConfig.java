@@ -25,7 +25,6 @@ import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.dynamodb.DynamoDbClientBuilder;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder;
 import software.amazon.awssdk.services.kinesis.model.DescribeStreamSummaryRequest;
@@ -243,15 +242,6 @@ public abstract class KCLAppConfig {
                 .build();
     }
 
-    public final DynamoDbClient buildDynamoDbClient() throws IOException {
-        if (this.dynamoDbClient == null) {
-            final DynamoDbClientBuilder builder = DynamoDbClient.builder().region(getRegion());
-            builder.credentialsProvider(getCredentialsProvider());
-            this.dynamoDbClient = builder.build();
-        }
-        return this.dynamoDbClient;
-    }
-
     public final DynamoDbAsyncClient buildAsyncDynamoDbClient() throws IOException {
         if (this.dynamoDbAsyncClient == null) {
             final DynamoDbAsyncClientBuilder builder = DynamoDbAsyncClient.builder().region(getRegion());
@@ -270,8 +260,8 @@ public abstract class KCLAppConfig {
         return this.cloudWatchAsyncClient;
     }
 
-    public final String getWorkerId() throws UnknownHostException {
-        return Inet4Address.getLocalHost().getHostName();
+    public final String getWorkerId(String workerIdSuffix) throws UnknownHostException {
+        return Inet4Address.getLocalHost().getHostName() + workerIdSuffix;
     }
 
     public RecordValidatorQueue getRecordValidator() {
@@ -291,7 +281,7 @@ public abstract class KCLAppConfig {
 
     public final ConfigsBuilder getConfigsBuilder(Map<Arn, Arn> streamToConsumerArnsMap, String workerIdSuffix)
             throws IOException, URISyntaxException {
-        final String workerId = getWorkerId() + workerIdSuffix;
+        final String workerId = getWorkerId(workerIdSuffix);
         final StreamTracker streamTracker = getStreamTracker(streamToConsumerArnsMap);
         if (streamTracker != null) {
             return new ConfigsBuilder(streamTracker, getApplicationName(),

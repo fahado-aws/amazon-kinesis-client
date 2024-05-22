@@ -1,5 +1,7 @@
 package software.amazon.kinesis.lifecycle;
 
+import static org.hamcrest.CoreMatchers.anyOf;
+import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -10,7 +12,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import org.junit.Test;
@@ -23,7 +27,7 @@ import com.google.common.collect.Lists;
 
 import lombok.AllArgsConstructor;
 import software.amazon.awssdk.arns.Arn;
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScanResponse;
@@ -42,6 +46,11 @@ import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.StreamTracker;
 import software.amazon.kinesis.utils.RecordValidatorQueue;
 
+/*
+ * Integration test verifying the end-to-end behaviour during KCL mode upgrade.
+ * Each test runs/stops multiple consumers in different mode to simulate upgrade or rollback, 
+ * then verify the process of records and the change of lease type.
+ */
 @RunWith(Enclosed.class)
 public class ConsumerModeUpdateIntegrationTest {
 
@@ -83,12 +92,13 @@ public class ConsumerModeUpdateIntegrationTest {
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBPrev));
                 assertTrue(helper.validateRecordsDelivery());
 
-                
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerBNext));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBNext, helper.consumerA));
                 assertTrue(helper.validateRecordsDelivery());
-                verifyLeasesType(helper.prevKCLAppConfig.buildDynamoDbClient(),
-                        KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName, prevMode, nextMode);
+                verifyLeasesType(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
+                        KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName,
+                        helper.consumerA.getWorkerIdentifier(), prevMode, helper.consumerBNext.getWorkerIdentifier(),
+                        nextMode);
 
             } finally {
                 // Clean up
@@ -128,8 +138,9 @@ public class ConsumerModeUpdateIntegrationTest {
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerBNext));
                 assertTrue(helper.consumerBNext.isTerminated());
                 assertTrue(helper.validateRecordsDelivery());
-                assertEquals(0, getLeaseCountOwnedBy(helper.prevKCLAppConfig.buildDynamoDbClient(),
-                        KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName, "B"));
+                assertEquals(0, getLeaseCountOwnedBy(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
+                        KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName,
+                        helper.consumerBNext.getWorkerIdentifier()));
 
             } finally {
                 // Clean up
@@ -149,19 +160,21 @@ public class ConsumerModeUpdateIntegrationTest {
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA, helper.consumerBPrev));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBPrev));
                 assertTrue(helper.validateRecordsDelivery());
-                
+
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA, helper.consumerBNext));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBNext, helper.consumerA));
                 assertTrue(helper.validateRecordsDelivery());
-                verifyLeasesType(helper.prevKCLAppConfig.buildDynamoDbClient(),
+                verifyLeasesType(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
                         KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName,
-                        prevMode, nextMode);
+                        helper.consumerA.getWorkerIdentifier(), prevMode, helper.consumerBNext.getWorkerIdentifier(),
+                        nextMode);
 
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerA));
                 assertFalse(helper.validateRecordsDelivery());
-                assertTrue(getLeaseCountOwnedBy(helper.prevKCLAppConfig.buildDynamoDbClient(),
-                        KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName, "B") > 0);
+                assertTrue(getLeaseCountOwnedBy(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
+                        KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName,
+                        helper.consumerBNext.getWorkerIdentifier()) > 0);
             } finally {
                 // Clean up
                 helper.cleanup();
@@ -169,18 +182,18 @@ public class ConsumerModeUpdateIntegrationTest {
         }
     }
 
-    private static void verifyLeasesType(DynamoDbClient ddbClient, String tableName, KCLMode prevMode, KCLMode nextMode)
+    private static void verifyLeasesType(DynamoDbAsyncClient ddbClient, String tableName, String consumerAIdentifier,
+            KCLMode consumerAMode, String consumerBIdentifier, KCLMode consumerBMode)
             throws Exception {
         ScanRequest scanRequest = ScanRequest.builder().tableName(tableName).build();
-        ScanResponse scanResponse = ddbClient.scan(scanRequest);
+        ScanResponse scanResponse = ddbClient.scan(scanRequest).get(30, TimeUnit.SECONDS);
         for (Map<String, AttributeValue> item : scanResponse.items()) {
             String leaseOwner = item.get("leaseOwner").s();
-            if (leaseOwner.endsWith("A")) {
-                assertTrue(verifyLeaseType(item, prevMode));
-            } else if (leaseOwner.endsWith("B")) {
-                assertTrue(verifyLeaseType(item, nextMode));
-            } else {
-                throw new Exception("A stale lease owned by " + leaseOwner + " found after running the scenario.");
+            assertEquals(anyOf(is(consumerAIdentifier), is(consumerBIdentifier)), leaseOwner);
+            if (leaseOwner.equals(consumerAIdentifier)) {
+                assertTrue(verifyLeaseType(item, consumerAMode));
+            } else if (leaseOwner.equals(consumerBIdentifier)) {
+                assertTrue(verifyLeaseType(item, consumerBMode));
             }
         }
     }
@@ -188,27 +201,30 @@ public class ConsumerModeUpdateIntegrationTest {
     private static Boolean verifyLeaseType(Map<String, AttributeValue> lease, KCLMode mode) throws Exception {
         AttributeValue streamName = lease.get("streamName");
         AttributeValue shardId = lease.get("shardId");
+        AttributeValue leaseKey = lease.get("leaseKey");
+        Boolean isLeaseKeySingleStreamFormat = leaseKey.s().split(":").length == 0;
         switch (mode) {
             case SingleStream:
-                return streamName == null && shardId == null;
+                return streamName == null && shardId == null && isLeaseKeySingleStreamFormat;
             case SingleStreamCompatible:
                 return true;
             case SingleStreamUpgrade:
             case MultiStream:
-                return streamName != null && shardId != null;
+                return streamName != null && shardId != null && !isLeaseKeySingleStreamFormat;
             default:
                 throw new Exception("Unable to verify lease type with the given mode: " + mode);
         }
     }
 
-    private static int getLeaseCountOwnedBy(DynamoDbClient ddbClient, String tableName, String workerIdSuffix) {
+    private static int getLeaseCountOwnedBy(DynamoDbAsyncClient ddbClient, String tableName, String workerIdentifier)
+            throws InterruptedException, ExecutionException, TimeoutException {
         ScanRequest scanRequest = ScanRequest.builder().tableName(tableName).build();
-        ScanResponse scanResponse = ddbClient.scan(scanRequest);
+        ScanResponse scanResponse = ddbClient.scan(scanRequest).get(30, TimeUnit.SECONDS);
         int cnt = 0;
         for (Map<String, AttributeValue> item : scanResponse.items()) {
             String leaseOwner = item.get("leaseOwner").s();
-            if (leaseOwner.endsWith(workerIdSuffix)) {
-                ++ cnt;
+            if (leaseOwner.equals(workerIdentifier)) {
+                ++cnt;
             }
         }
         return cnt;
