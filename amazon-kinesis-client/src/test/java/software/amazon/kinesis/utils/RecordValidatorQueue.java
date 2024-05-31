@@ -26,8 +26,25 @@ public class RecordValidatorQueue {
         values.add(data);
     }
 
+    public void clear() {
+        dict.clear();
+    }
+
     public RecordValidationStatus validateRecords(int expectedRecordCount) {
 
+        if (!validateRecordsOrder()) {
+            return RecordValidationStatus.OUT_OF_ORDER;
+        }
+
+        if (!validateRecordsDelivery(expectedRecordCount)) {
+            return RecordValidationStatus.MISSING_RECORD;
+        }
+
+        // Record validation succeeded.
+        return RecordValidationStatus.NO_ERROR;
+    }
+
+    public Boolean validateRecordsOrder() {
         // Validate that each List in the HashMap has data records in increasing order
         for (Map.Entry<String, List<String>> entry : dict.entrySet()) {
             List<String> recordsPerShard = entry.getValue();
@@ -36,12 +53,15 @@ public class RecordValidatorQueue {
                 int nextVal = Integer.parseInt(record);
                 if (prevVal > nextVal) {
                     log.error("The records are not in increasing order. Saw record data {} before {}.", prevVal, nextVal);
-                    return RecordValidationStatus.OUT_OF_ORDER;
+                    return false;
                 }
                 prevVal = nextVal;
             }
         }
+        return true;
+    }
 
+    public Boolean validateRecordsDelivery(int expectedRecordCount) {
         // Validate that no records are missing over all shards
         int actualRecordCount = 0;
         for (Map.Entry<String, List<String>> entry : dict.entrySet()) {
@@ -53,11 +73,8 @@ public class RecordValidatorQueue {
         // If this is true, then there was some record that was missed during processing.
         if (actualRecordCount != expectedRecordCount) {
             log.error("Failed to get correct number of records processed. Should be {} but was {}", expectedRecordCount, actualRecordCount);
-            return RecordValidationStatus.MISSING_RECORD;
+            return false;
         }
-
-        // Record validation succeeded.
-        return RecordValidationStatus.NO_ERROR;
+        return true;
     }
-
 }
