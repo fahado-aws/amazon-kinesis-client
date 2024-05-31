@@ -2,6 +2,7 @@ package software.amazon.kinesis.lifecycle;
 
 import static org.hamcrest.CoreMatchers.anyOf;
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -88,10 +89,13 @@ public class ConsumerModeUpdateIntegrationTest {
             ConsumerModeUpdateIntegrationTestHelper helper = new ConsumerModeUpdateIntegrationTestHelper(prevMode,
                     nextMode);
             try {
+                // Run consumer A and B in the prev mode.
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA, helper.consumerBPrev));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBPrev));
                 assertTrue(helper.validateRecordsDelivery());
 
+                // Update consumer B to the next mode. All records should be processed and each
+                // lease should be in correct format.
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerBNext));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBNext, helper.consumerA));
                 assertTrue(helper.validateRecordsDelivery());
@@ -131,12 +135,18 @@ public class ConsumerModeUpdateIntegrationTest {
             ConsumerModeUpdateIntegrationTestHelper helper = new ConsumerModeUpdateIntegrationTestHelper(prevMode,
                     nextMode);
             try {
+                // Run consumer A and B in the prev mode.
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA, helper.consumerBPrev));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBPrev));
                 assertTrue(helper.validateRecordsDelivery());
 
+                // Update consumer B to the next mode. Consumer B should be failed to start
+                // because it is unable to be initialized due to the incompatible
+                // leases. However, all records would be consumed by consumer A and no lease
+                // would be acquired by consumer B.
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerBNext));
                 assertTrue(helper.consumerBNext.isTerminated());
+                helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBNext, helper.consumerA));
                 assertTrue(helper.validateRecordsDelivery());
                 assertEquals(0, getLeaseCountOwnedBy(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
                         KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName,
@@ -149,7 +159,8 @@ public class ConsumerModeUpdateIntegrationTest {
         }
     }
 
-    public class FailurePathNonParameterizedIntegrationTest {
+    public static class FailurePathNonParameterizedIntegrationTest {
+
         @Test
         public void consumerModeUpdateFromSingleStreamToSingleStreamUpgradeTest() throws Exception {
             KCLMode prevMode = KCLMode.SingleStream;
@@ -157,19 +168,27 @@ public class ConsumerModeUpdateIntegrationTest {
             ConsumerModeUpdateIntegrationTestHelper helper = new ConsumerModeUpdateIntegrationTestHelper(prevMode,
                     nextMode);
             try {
+                // Run consumer A and B in SingleStream mode.
                 helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA, helper.consumerBPrev));
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBPrev));
                 assertTrue(helper.validateRecordsDelivery());
 
-                helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA, helper.consumerBNext));
-                helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBNext, helper.consumerA));
+                // Update consumer B to the SingleStreamUpgrade mode. All records should be
+                // processed and leases owned by consumer B will be upgraded to MultiStream
+                // format.
+                helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerBNext));
+                helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerBNext));
                 assertTrue(helper.validateRecordsDelivery());
                 verifyLeasesType(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
                         KCLAppConfig.INTEGRATION_TEST_RESOURCE_PREFIX + helper.testName,
                         helper.consumerA.getWorkerIdentifier(), prevMode, helper.consumerBNext.getWorkerIdentifier(),
                         nextMode);
 
-                helper.runProducerAndConsumersThenWait(Lists.newArrayList(helper.consumerA));
+                // Run consumer A only in SingleStream mode. Consumer A consume the leases
+                // already own but wouldn't acquire the MultiStream format lease previously
+                // onwed by consumer B. Therefore, some events would be lost.
+                helper.runProducerAndConsumersThenWait(Collections.emptyList());
+                assertFalse(helper.consumerA.isTerminated());
                 helper.stopProducerAndConsumers(Lists.newArrayList(helper.consumerA));
                 assertFalse(helper.validateRecordsDelivery());
                 assertTrue(getLeaseCountOwnedBy(helper.prevKCLAppConfig.buildAsyncDynamoDbClient(),
@@ -189,7 +208,7 @@ public class ConsumerModeUpdateIntegrationTest {
         ScanResponse scanResponse = ddbClient.scan(scanRequest).get(30, TimeUnit.SECONDS);
         for (Map<String, AttributeValue> item : scanResponse.items()) {
             String leaseOwner = item.get("leaseOwner").s();
-            assertEquals(anyOf(is(consumerAIdentifier), is(consumerBIdentifier)), leaseOwner);
+            assertThat(leaseOwner, anyOf(is(consumerAIdentifier), is(consumerBIdentifier)));
             if (leaseOwner.equals(consumerAIdentifier)) {
                 assertTrue(verifyLeaseType(item, consumerAMode));
             } else if (leaseOwner.equals(consumerBIdentifier)) {
@@ -202,7 +221,8 @@ public class ConsumerModeUpdateIntegrationTest {
         AttributeValue streamName = lease.get("streamName");
         AttributeValue shardId = lease.get("shardId");
         AttributeValue leaseKey = lease.get("leaseKey");
-        Boolean isLeaseKeySingleStreamFormat = leaseKey.s().split(":").length == 0;
+        Boolean isLeaseKeySingleStreamFormat = leaseKey.s().split(":").length == 1;
+        Boolean isLeaseKeyMultiStreamFormat = leaseKey.s().split(":").length == 4;
         switch (mode) {
             case SingleStream:
                 return streamName == null && shardId == null && isLeaseKeySingleStreamFormat;
@@ -210,7 +230,7 @@ public class ConsumerModeUpdateIntegrationTest {
                 return true;
             case SingleStreamUpgrade:
             case MultiStream:
-                return streamName != null && shardId != null && !isLeaseKeySingleStreamFormat;
+                return streamName != null && shardId != null && isLeaseKeyMultiStreamFormat;
             default:
                 throw new Exception("Unable to verify lease type with the given mode: " + mode);
         }
@@ -282,12 +302,15 @@ public class ConsumerModeUpdateIntegrationTest {
         }
 
         public Boolean validateRecordsDelivery() {
-            return this.recordValidator.validateRecordsDelivery(this.producer.successfulPutRecords);
+            Boolean result = this.recordValidator.validateRecordsDelivery(this.producer.successfulPutRecords);
+            this.producer.successfulPutRecords = 0;
+            this.recordValidator.clear();
+            return result;
         }
 
         private void initialize() throws Exception {
             final UUID uniqueId = UUID.randomUUID();
-            this.testName = "ModeUpdateFrom" + this.prevMode + "to" + this.nextMode + "Test_" + uniqueId;
+            this.testName = "ModeUpdateFrom" + this.prevMode + "To" + this.nextMode + "Test_" + uniqueId;
             this.streamName = testName;
 
             this.recordValidator = new RecordValidatorQueue();
