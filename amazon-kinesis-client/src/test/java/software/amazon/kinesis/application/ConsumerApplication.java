@@ -11,6 +11,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.arns.Arn;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
@@ -30,6 +31,7 @@ import software.amazon.kinesis.utils.LeaseTableManager;
 import software.amazon.kinesis.utils.StreamExistenceManager;
 
 @Slf4j
+@Getter
 public class ConsumerApplication {
 
     private KCLAppConfig consumerConfig;
@@ -44,6 +46,7 @@ public class ConsumerApplication {
     private ScheduledExecutorService consumerExecutor;
     private ScheduledFuture<?> consumerFuture;
     private String workerIdSuffix;
+    private String workerIdentifier;
 
     public ConsumerApplication(KCLAppConfig consumerConfig, String workerIdSuffix) {
         this.consumerConfig = consumerConfig;
@@ -75,9 +78,14 @@ public class ConsumerApplication {
         }
     }
 
+    public Boolean isTerminated() {
+        return this.scheduler == null || this.scheduler.shutdownComplete();
+    }
+
     private void setUpConsumerResources(Map<Arn, Arn> streamToConsumerArnsMap) throws Exception {
         // Setup configuration of KCL (including DynamoDB and CloudWatch)
         final ConfigsBuilder configsBuilder = consumerConfig.getConfigsBuilder(streamToConsumerArnsMap, workerIdSuffix);
+        this.workerIdentifier = configsBuilder.workerIdentifier();
 
         // For polling mode in both CAA and non CAA, set retrievalSpecificConfig to use PollingConfig
         // For SingleStreamMode EFO CAA, must set the retrieval config to specify the consumerArn in FanoutConfig

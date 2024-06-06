@@ -26,6 +26,10 @@ public class RecordValidatorQueue {
         values.add(data);
     }
 
+    public void clear() {
+        dict.clear();
+    }
+
     public RecordValidationStatus validateRecords(int expectedRecordCount) {
 
         if (!validateRecordsOrder()) {
