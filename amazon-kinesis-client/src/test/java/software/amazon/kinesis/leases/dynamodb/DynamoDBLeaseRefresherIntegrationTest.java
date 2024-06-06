@@ -29,11 +29,13 @@ import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseIntegrationTest;
 import software.amazon.kinesis.leases.UpdateField;
+import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doNothing;
@@ -366,9 +368,8 @@ public class DynamoDBLeaseRefresherIntegrationTest extends LeaseIntegrationTest 
         oldLease.ownerSwitchesSinceCheckpoint(), oldLease.parentShardIds(), oldLease.childShardIds(),
         oldLease.pendingCheckpointState(), oldLease.hashKeyRangeForLease());
 
-        boolean result = leaseRefresher.replaceLease(oldLease, newLease);
+        assertThrows(InvalidStateException.class, () -> leaseRefresher.replaceLease(oldLease, newLease));
 
-        assertFalse(result);
         Lease persistedOldLease = leaseRefresher.getLease(oldLease.leaseKey());
         assertEquals(oldLease, persistedOldLease);
         Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());

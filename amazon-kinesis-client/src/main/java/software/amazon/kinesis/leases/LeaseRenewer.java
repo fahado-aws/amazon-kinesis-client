@@ -64,11 +64,8 @@ public interface LeaseRenewer {
      * last time the lease counter was incremented before being passed to this method.
      * 
      * @param newLeases new leases.
-     * @throws InvalidStateException
-     * @throws ProvisionedThroughputException
-     * @throws DependencyException
      */
-    void addLeasesToRenew(Collection<Lease> newLeases) throws DependencyException, ProvisionedThroughputException, InvalidStateException;
+    void addLeasesToRenew(Collection<Lease> newLeases);
 
     /**
      * Clears this LeaseRenewer's set of currently held leases.

@@ -248,12 +248,11 @@ public interface LeaseRefresher {
      * Replaces old lease record with a new lease record.
      * @param oldLease Old lease which is to be deleted
      * @param newLease New lease which is to be created
-     * @return
      * @throws DependencyException
      * @throws InvalidStateException
      * @throws ProvisionedThroughputException
      */
-    default boolean replaceLease(Lease oldLease, Lease newLease)
+    default void replaceLease(Lease oldLease, Lease newLease)
             throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         throw new UnsupportedOperationException();
     }

@@ -15,10 +15,7 @@
 
 package software.amazon.kinesis.leases;
 
-import java.util.Map;
-
 import software.amazon.kinesis.common.StreamConfig;
-import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.coordinator.DeletedStreamListProvider;
 import software.amazon.kinesis.leases.dynamodb.DynamoDBLeaseRefresher;
 import software.amazon.kinesis.metrics.MetricsFactory;
@@ -28,11 +25,6 @@ import software.amazon.kinesis.metrics.MetricsFactory;
  */
 public interface LeaseManagementFactory {
     LeaseCoordinator createLeaseCoordinator(MetricsFactory metricsFactory);
-
-    default LeaseCoordinator createLeaseCoordinator(MetricsFactory metricsFactory,
-        Map<StreamIdentifier, StreamConfig> streamConfigMap) {
-            throw new UnsupportedOperationException();
-    }
 
     ShardSyncTaskManager createShardSyncTaskManager(MetricsFactory metricsFactory);
 
@@ -55,8 +47,4 @@ public interface LeaseManagementFactory {
 
     LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory);
 
-    default LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory,
-        Map<StreamIdentifier, StreamConfig> streamConfigMap) {
-            throw new UnsupportedOperationException();
-    }
 }

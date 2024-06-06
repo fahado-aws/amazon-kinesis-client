@@ -119,6 +119,8 @@ public class Scheduler implements Runnable {
     private static final long NEW_STREAM_CHECK_INTERVAL_MILLIS = 60_000L;
     private static final boolean SHOULD_DO_LEASE_SYNC_FOR_OLD_STREAMS = false;
     private static final String MULTI_STREAM_TRACKER = "MultiStreamTracker";
+    private static final String UPGRADE_LEASES_OPERATION = "UpgradeLeases";
+    private static final String NUM_UPGRADE_LEASES = "NumUpgradedLeases";
     private static final String ACTIVE_STREAMS_COUNT = "ActiveStreams.Count";
     private static final String PENDING_STREAMS_DELETION_COUNT = "StreamsPendingDeletion.Count";
     private static final String DELETED_STREAMS_COUNT = "DeletedStreams.Count";
@@ -255,7 +257,7 @@ public class Scheduler implements Runnable {
         final LeaseSerializer leaseSerializer = new DynamoDBLeaseSerializer(streamProcessingMode);
         this.leaseCoordinator = this.leaseManagementConfig
                 .leaseManagementFactory(leaseSerializer, streamProcessingMode)
-                .createLeaseCoordinator(this.metricsFactory, currentStreamConfigMap);
+                .createLeaseCoordinator(this.metricsFactory);
         this.leaseRefresher = this.leaseCoordinator.leaseRefresher();
 
         //
@@ -311,7 +313,7 @@ public class Scheduler implements Runnable {
                 leaseManagementConfig.leasesRecoveryAuditorInconsistencyConfidenceThreshold(),
                 leaderSynced, streamProcessingMode);
         this.leaseCleanupManager = this.leaseManagementConfig.leaseManagementFactory(leaseSerializer, streamProcessingMode)
-                .createLeaseCleanupManager(metricsFactory, currentStreamConfigMap);
+                .createLeaseCleanupManager(metricsFactory);
         this.schemaRegistryDecoder =
             this.retrievalConfig.glueSchemaRegistryDeserializer() == null ?
                 null
@@ -421,6 +423,7 @@ public class Scheduler implements Runnable {
     @VisibleForTesting
     void runProcessLoop() {
         try {
+            checkAndUpgradeSingleStreamLeases();
             Set<ShardInfo> assignedShards = new HashSet<>();
             for (ShardInfo shardInfo : getShardInfoForAssignments()) {
                 ShardConsumer shardConsumer = createOrGetShardConsumer(shardInfo,
@@ -1088,6 +1091,59 @@ public class Scheduler implements Runnable {
 
         return new StreamConfig(
                 streamIdentifierWithArn, streamConfig.initialPositionInStreamExtended(), streamConfig.consumerArn());
+    }
+
+    @VisibleForTesting
+    void checkAndUpgradeSingleStreamLeases() {
+        if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE) {
+            Validate.isTrue(currentStreamConfigMap.size() == 1, "Lease cannot be converted to MultiStream"
+                    + " format when more than one stream is provided in configuration");
+            final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, UPGRADE_LEASES_OPERATION);
+            final long startTime = System.currentTimeMillis();
+            int failureCount = 0;
+            int numberOfUpgradedLeases = 0;
+            try {
+                Collection<Lease> assignedLeases = leaseCoordinator.getAssignments();
+                List<Lease> newLeases = new ArrayList<>();
+                List<Lease> oldLeases = new ArrayList<>();
+                for (Lease lease : assignedLeases) {
+                    if (!(lease instanceof MultiStreamLease)) {
+                        MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
+                        try {
+                            leaseRefresher.replaceLease(lease, multiStreamLease);
+                            newLeases.add(multiStreamLease);
+                            oldLeases.add(lease);
+                        } catch (Throwable e) {
+                            log.warn(String.format("Worker %s caught exception while attempting to upgrade lease",
+                                leaseManagementConfig.workerIdentifier()), e);
+                            failureCount++;
+                        }
+                    }
+                }
+                numberOfUpgradedLeases = newLeases.size();
+                if (newLeases.size() > 0) {
+                    leaseCoordinator.addLeasesToRenew(newLeases);
+                }
+                if (oldLeases.size() > 0) {
+                    leaseCoordinator.dropLeases(oldLeases);
+                }
+            } finally {
+                MetricsUtil.addSuccessAndLatency(metricsScope, (0 == failureCount), startTime, MetricsLevel.DETAILED);
+                MetricsUtil.addCount(metricsScope, NUM_UPGRADE_LEASES, numberOfUpgradedLeases, MetricsLevel.DETAILED);
+                MetricsUtil.endScope(metricsScope);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    MultiStreamLease convertToMultiStreamLease(Lease lease) {
+        StreamConfig streamConfig = currentStreamConfigMap.values().iterator().next();
+        MultiStreamLease multiStreamLease = new MultiStreamLease(lease,
+            MultiStreamLease.getLeaseKey(streamConfig.streamIdentifier().serialize(), lease.leaseKey()),
+            streamConfig.streamIdentifier().serialize(), lease.leaseKey());
+        multiStreamLease.streamIdentifier(streamConfig.streamIdentifier().serialize());
+        multiStreamLease.shardId(lease.leaseKey());
+        return multiStreamLease;
     }
 
     @RequiredArgsConstructor

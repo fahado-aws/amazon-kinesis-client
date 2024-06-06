@@ -17,7 +17,6 @@ package software.amazon.kinesis.leases.dynamodb;
 
 import java.time.Duration;
 import java.util.Collection;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
@@ -733,25 +732,8 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
                 maxLeaseRenewalThreads,
                 initialLeaseTableReadCapacity,
                 initialLeaseTableWriteCapacity,
-                metricsFactory);
-    }
-
-    @Override
-    public LeaseCoordinator createLeaseCoordinator(@NonNull final MetricsFactory metricsFactory,
-        Map<StreamIdentifier, StreamConfig> streamConfigMap) {
-        return new DynamoDBLeaseCoordinator(this.createLeaseRefresher(),
-                workerIdentifier,
-                failoverTimeMillis,
-                enablePriorityLeaseAssignment,
-                epsilonMillis,
-                maxLeasesForWorker,
-                maxLeasesToStealAtOneTime,
-                maxLeaseRenewalThreads,
-                initialLeaseTableReadCapacity,
-                initialLeaseTableWriteCapacity,
                 metricsFactory,
-                streamProcessingMode,
-                streamConfigMap);
+                streamProcessingMode);
     }
 
     @Override @Deprecated
@@ -838,16 +820,6 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
     @Override
     public LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory) {
         return new LeaseCleanupManager(createLeaseCoordinator(metricsFactory),
-                metricsFactory, Executors.newSingleThreadScheduledExecutor(),
-                cleanupLeasesUponShardCompletion, leaseCleanupConfig.leaseCleanupIntervalMillis(),
-                leaseCleanupConfig.completedLeaseCleanupIntervalMillis(),
-                leaseCleanupConfig.garbageLeaseCleanupIntervalMillis());
-    }
-
-    @Override
-    public LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory,
-        Map<StreamIdentifier, StreamConfig> streamConfigMap) {
-        return new LeaseCleanupManager(createLeaseCoordinator(metricsFactory, streamConfigMap),
                 metricsFactory, Executors.newSingleThreadScheduledExecutor(),
                 cleanupLeasesUponShardCompletion, leaseCleanupConfig.leaseCleanupIntervalMillis(),
                 leaseCleanupConfig.completedLeaseCleanupIntervalMillis(),

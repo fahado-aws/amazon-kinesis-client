@@ -36,8 +36,6 @@ import javax.annotation.Nullable;
 import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
-import software.amazon.kinesis.common.StreamConfig;
-import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseCoordinator;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
@@ -207,7 +205,7 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
             enablePriorityLeaseAssignment, epsilonMillis, maxLeasesForWorker,
             maxLeasesToStealAtOneTime, maxLeaseRenewerThreadCount,
             initialLeaseTableReadCapacity, initialLeaseTableWriteCapacity, metricsFactory,
-            null, null);
+            null);
     }
     /**
      * Constructor.
@@ -234,8 +232,6 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
      *            Used to publish metrics about lease operations
      * @param streamProcessingMode
      *            StreamProcessingMode in which application is running
-     * @param streamConfigMap
-     *            Map of streams that application is configured to process
      */
     public DynamoDBLeaseCoordinator(final LeaseRefresher leaseRefresher,
             final String workerIdentifier,
@@ -248,8 +244,7 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
             final long initialLeaseTableReadCapacity,
             final long initialLeaseTableWriteCapacity,
             final MetricsFactory metricsFactory,
-            final StreamProcessingMode streamProcessingMode,
-            final Map<StreamIdentifier, StreamConfig> streamConfigMap) {
+            final StreamProcessingMode streamProcessingMode) {
         this.leaseRefresher = leaseRefresher;
         this.leaseRenewalThreadpool = getLeaseRenewalExecutorService(maxLeaseRenewerThreadCount);
         this.leaseTaker = new DynamoDBLeaseTaker(leaseRefresher, workerIdentifier, leaseDurationMillis, metricsFactory)
@@ -257,7 +252,7 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
                 .withMaxLeasesToStealAtOneTime(maxLeasesToStealAtOneTime)
                 .withEnablePriorityLeaseAssignment(enablePriorityLeaseAssignment);
         this.leaseRenewer = new DynamoDBLeaseRenewer(leaseRefresher, workerIdentifier, leaseDurationMillis,
-            leaseRenewalThreadpool, metricsFactory, streamProcessingMode, streamConfigMap);
+            leaseRenewalThreadpool, metricsFactory);
         this.renewerIntervalMillis = getRenewerTakerIntervalMillis(leaseDurationMillis, epsilonMillis);
         this.takerIntervalMillis = (leaseDurationMillis + epsilonMillis) * 2;
         if (initialLeaseTableReadCapacity <= 0) {
@@ -348,7 +343,7 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
     }
 
     @Override
-    public void runLeaseTaker() throws DependencyException, InvalidStateException, ProvisionedThroughputException {
+    public void runLeaseTaker() throws DependencyException, InvalidStateException {
         MetricsScope scope = MetricsUtil.createMetricsWithOperation(metricsFactory, "TakeLeases");
         long startTime = System.currentTimeMillis();
         boolean success = false;
@@ -380,6 +375,28 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
     @Override
     public void runLeaseRenewer() throws DependencyException, InvalidStateException {
         leaseRenewer.renewLeases();
+    }
+
+    @Override
+    public void addLeasesToRenew(Collection<Lease> leases) {
+        // Only add leases to renewer if coordinator is still running.
+        synchronized (shutdownLock) {
+            if (running) {
+                leaseRenewer.addLeasesToRenew(leases);
+            }
+        }
+    }
+
+    @Override
+    public void dropLeases(Collection<Lease> leases) {
+        // Only add leases to renewer if coordinator is still running.
+        synchronized (shutdownLock) {
+            if (running) {
+                for (Lease lease : leases) {
+                    leaseRenewer.dropLease(lease);
+                }
+            }
+        }
     }
 
     @Override

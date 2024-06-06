@@ -5,12 +5,20 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
+
+import lombok.SneakyThrows;
+import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseRefresher;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.metrics.MetricsFactory;
 
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.UUID;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -80,6 +88,88 @@ public class DynamoDBLeaseCoordinatorTest {
     public void testStopLeaseTakerBeforeStart() {
         leaseCoordinator.stopLeaseTaker();
         assertTrue(leaseCoordinator.getAssignments().isEmpty());
+    }
+
+    @SneakyThrows
+    @Test
+    public void testAddLeasesToRenew() {
+        when(leaseRefresher.createLeaseTableIfNotExists()).thenReturn(true);
+        when(leaseRefresher.waitUntilLeaseTableExists(SECONDS_BETWEEN_POLLS, TIMEOUT_SECONDS)).thenReturn(true);
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        lease1.lastCounterIncrementNanos(System.nanoTime());
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        lease2.lastCounterIncrementNanos(System.nanoTime());
+        Collection<Lease> leases = Arrays.asList(lease1, lease2);
+
+        leaseCoordinator.start();
+        leaseCoordinator.addLeasesToRenew(leases);
+
+        assertEquals(leases.size(), leaseCoordinator.getCurrentAssignments().size());
+        assertNotNull(leaseCoordinator.getCurrentlyHeldLease(lease1.leaseKey()));
+        assertNotNull(leaseCoordinator.getCurrentlyHeldLease(lease2.leaseKey()));
+
+        leaseCoordinator.stop();
+    }
+
+    @Test
+    public void testAddLeasesToRenewDoesNothingWhenCoordinatorIsNotRunning() {
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        lease1.lastCounterIncrementNanos(System.nanoTime());
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        lease2.lastCounterIncrementNanos(System.nanoTime());
+        Collection<Lease> leases = Arrays.asList(lease1, lease2);
+
+        leaseCoordinator.addLeasesToRenew(leases);
+
+        assertEquals(0, leaseCoordinator.getCurrentAssignments().size());
+    }
+
+    @SneakyThrows
+    @Test
+    public void testDropLeases() {
+        when(leaseRefresher.createLeaseTableIfNotExists()).thenReturn(true);
+        when(leaseRefresher.waitUntilLeaseTableExists(SECONDS_BETWEEN_POLLS, TIMEOUT_SECONDS)).thenReturn(true);
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        lease1.lastCounterIncrementNanos(System.nanoTime());
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        lease2.lastCounterIncrementNanos(System.nanoTime());
+        Lease lease3 = new Lease();
+        lease3.leaseKey("shardId-003");
+        lease3.lastCounterIncrementNanos(System.nanoTime());
+        Collection<Lease> leases = Arrays.asList(lease1, lease2, lease3);
+
+        leaseCoordinator.start();
+        leaseCoordinator.addLeasesToRenew(leases);
+        leaseCoordinator.dropLeases(Arrays.asList(lease2, lease3));
+
+        assertEquals(1, leaseCoordinator.getCurrentAssignments().size());
+        assertNotNull(leaseCoordinator.getCurrentlyHeldLease(lease1.leaseKey()));
+        assertNull(leaseCoordinator.getCurrentlyHeldLease(lease2.leaseKey()));
+        assertNull(leaseCoordinator.getCurrentlyHeldLease(lease3.leaseKey()));
+
+        leaseCoordinator.stop();
+    }
+
+    @SneakyThrows
+    @Test
+    public void testDropLeasesDoesNothingWhenCoordinatorIsNotRunning() {
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        lease1.lastCounterIncrementNanos(System.nanoTime());
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        lease2.lastCounterIncrementNanos(System.nanoTime());
+        Collection<Lease> leases = Arrays.asList(lease1, lease2);
+
+        assertEquals(0, leaseCoordinator.getCurrentAssignments().size());
+        leaseCoordinator.dropLeases(leases);
+        assertEquals(0, leaseCoordinator.getCurrentAssignments().size());
     }
 
 }
