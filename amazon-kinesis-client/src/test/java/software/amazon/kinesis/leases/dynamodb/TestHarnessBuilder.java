@@ -30,6 +30,7 @@ import software.amazon.kinesis.leases.LeaseRenewer;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
+import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
 public class TestHarnessBuilder {
@@ -157,7 +158,7 @@ public class TestHarnessBuilder {
     }
 
     public void addLeasesToRenew(LeaseRenewer renewer, String... shardIds)
-        throws DependencyException, InvalidStateException {
+        throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         List<Lease> leasesToRenew = new ArrayList<Lease>();
 
         for (String shardId : shardIds) {

@@ -21,9 +21,15 @@ import lombok.NoArgsConstructor;
 import lombok.NonNull;
 import lombok.Setter;
 import lombok.experimental.Accessors;
+import software.amazon.kinesis.common.HashKeyRangeForLease;
+import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
+
 import org.apache.commons.lang3.Validate;
 
 import static com.google.common.base.Verify.verifyNotNull;
+
+import java.util.Set;
+import java.util.UUID;
 
 @Setter
 @NoArgsConstructor
@@ -39,6 +45,53 @@ public class MultiStreamLease extends Lease {
         super(other);
         streamIdentifier(other.streamIdentifier);
         shardId(other.shardId);
+    }
+
+    /**
+     * Constructor to instantiate a MultiStreamLease from a single stream Lease
+     * @param lease lease in the single stream lease format
+     * @param leaseKey new lease key for the MultiStreamLease
+     * @param streamIdentifier streamIdentifier field that is only used in a MultiStreamLease
+     * @param shardId shardId field that is only used in a MultiStreamLease
+     */
+    public MultiStreamLease(Lease lease, String leaseKey, String streamIdentifier, String shardId) {
+        super(leaseKey, lease.leaseOwner(), lease.leaseCounter(), lease.concurrencyToken(),
+                lease.lastCounterIncrementNanos(), lease.checkpoint(), lease.pendingCheckpoint(),
+                lease.ownerSwitchesSinceCheckpoint(), lease.parentShardIds(), lease.childShardIds(),
+                lease.pendingCheckpointState(), lease.hashKeyRangeForLease());
+        streamIdentifier(streamIdentifier);
+        shardId(shardId);
+    }
+
+    /**
+     * Constructor will all required parameters
+     * @param leaseKey
+     * @param leaseOwner
+     * @param leaseCounter
+     * @param concurrencyToken
+     * @param lastCounterIncrementNanos
+     * @param checkpoint
+     * @param pendingCheckpoint
+     * @param ownerSwitchesSinceCheckpoint
+     * @param parentShardIds
+     * @param childShardIds
+     * @param pendingCheckpointState
+     * @param hashKeyRangeForLease
+     * @param streamIdentifier
+     * @param shardId
+     */
+    public MultiStreamLease(String leaseKey, String leaseOwner, Long leaseCounter,
+        UUID concurrencyToken, Long lastCounterIncrementNanos,
+        ExtendedSequenceNumber checkpoint, ExtendedSequenceNumber pendingCheckpoint,
+        Long ownerSwitchesSinceCheckpoint, Set<String> parentShardIds, Set<String> childShardIds,
+        byte[] pendingCheckpointState, HashKeyRangeForLease hashKeyRangeForLease,
+        String streamIdentifier, String shardId) {
+        super(leaseKey, leaseOwner, leaseCounter, concurrencyToken,
+                lastCounterIncrementNanos, checkpoint, pendingCheckpoint,
+                ownerSwitchesSinceCheckpoint, parentShardIds, childShardIds,
+                pendingCheckpointState, hashKeyRangeForLease);
+        streamIdentifier(streamIdentifier);
+        shardId(shardId);
     }
 
     @Override

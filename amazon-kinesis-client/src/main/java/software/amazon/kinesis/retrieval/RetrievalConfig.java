@@ -33,6 +33,7 @@ import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.SingleStreamTracker;
 import software.amazon.kinesis.processor.StreamTracker;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.fanout.FanOutConfig;
 
 /**
@@ -149,9 +150,9 @@ public class RetrievalConfig {
      */
     @Deprecated
     public RetrievalConfig initialPositionInStreamExtended(InitialPositionInStreamExtended initialPositionInStreamExtended) {
-        if (streamTracker().isMultiStream()) {
+        if (streamTracker().isMultiStream() || StreamProcessingMode.SINGLE_STREAM_MODE != streamTracker().streamProcessingMode()) {
             throw new IllegalArgumentException(
-                    "Cannot set initialPositionInStreamExtended when multiStreamTracker is set");
+                    "Cannot set initialPositionInStreamExtended when StreamTracker is set");
         }
 
         final StreamIdentifier streamIdentifier = getSingleStreamIdentifier();

@@ -1,7 +1,9 @@
-package software.amazon.kinesis.config;
+package software.amazon.kinesis.config.multistream;
 
 import software.amazon.awssdk.arns.Arn;
 import software.amazon.awssdk.http.Protocol;
+import software.amazon.kinesis.config.KCLAppConfig;
+import software.amazon.kinesis.config.RetrievalMode;
 
 import java.util.ArrayList;
 import java.util.List;

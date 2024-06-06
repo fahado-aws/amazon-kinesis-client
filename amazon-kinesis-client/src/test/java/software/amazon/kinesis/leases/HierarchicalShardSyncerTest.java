@@ -57,6 +57,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
+import software.amazon.awssdk.services.kinesis.model.ChildShard;
 import software.amazon.awssdk.services.kinesis.model.HashKeyRange;
 import software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException;
 import software.amazon.awssdk.services.kinesis.model.SequenceNumberRange;
@@ -75,6 +76,7 @@ import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
 import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.NullMetricsScope;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
 import static software.amazon.kinesis.leases.HierarchicalShardSyncer.MemoizationContext;
@@ -94,7 +96,10 @@ public class HierarchicalShardSyncerTest {
     private static final boolean MULTISTREAM_MODE_ON = true;
     private static final String STREAM_IDENTIFIER = "123456789012:stream:1";
     private static final HierarchicalShardSyncer.MultiStreamArgs MULTI_STREAM_ARGS = new HierarchicalShardSyncer.MultiStreamArgs(
-            MULTISTREAM_MODE_ON, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
+            StreamProcessingMode.MULTI_STREAM_MODE, MULTISTREAM_MODE_ON, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
+    private static final HierarchicalShardSyncer.MultiStreamArgs SINGLE_STREAM_UPGRADE_MODE_ARGS =
+        new HierarchicalShardSyncer.MultiStreamArgs(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE, true,
+        StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
 
     /**
      * <pre>
@@ -184,6 +189,18 @@ public class HierarchicalShardSyncerTest {
     }
 
     /**
+     * Test determineNewLeasesToCreate() where there are no shards in SingleStreamUpgradeMode
+     */
+    @Test public void testDetermineNewLeasesToCreateNoShardsInSingleStreamUpgradeMode() {
+        final List<Shard> shards = Collections.emptyList();
+        final List<Lease> leases = Collections.emptyList();
+        final HierarchicalShardSyncer.LeaseSynchronizer emptyLeaseTableSynchronizer = new HierarchicalShardSyncer.EmptyLeaseTableSynchronizer();
+
+        assertTrue(determineNewLeasesToCreate(emptyLeaseTableSynchronizer, shards, leases, INITIAL_POSITION_LATEST,
+                Collections.emptySet(), SINGLE_STREAM_UPGRADE_MODE_ARGS).isEmpty());
+    }
+
+    /**
      * Test determineNewLeasesToCreate() where there are no leases and no resharding operations have been performed
      */
     @Test
@@ -218,6 +235,26 @@ public class HierarchicalShardSyncerTest {
 
         final List<Lease> newLeases = determineNewLeasesToCreate(emptyLeaseTableSynchronizer,
                 shards, currentLeases, INITIAL_POSITION_LATEST, new HashSet<>(), MULTI_STREAM_ARGS);
+        validateLeases(newLeases, toMultiStreamLeases(shardId0, shardId1));
+    }
+
+        /**
+     * Test determineNewLeasesToCreate() where there are no leases and no resharding operations have been performed
+     * in SingleStreamUpgradeMode
+     */
+    @Test
+    public void testDetermineNewLeasesToCreate0Leases0ReshardsInSingleStreamUpgradeMode() {
+        final String shardId0 = "shardId-0";
+        final String shardId1 = "shardId-1";
+        final SequenceNumberRange sequenceRange = ShardObjectHelper.newSequenceNumberRange("342980", null);
+
+        final List<Shard> shards = Arrays.asList(ShardObjectHelper.newShard(shardId0, null, null, sequenceRange),
+                ShardObjectHelper.newShard(shardId1, null, null, sequenceRange));
+        final List<Lease> currentLeases = Collections.emptyList();
+        final HierarchicalShardSyncer.LeaseSynchronizer emptyLeaseTableSynchronizer = new HierarchicalShardSyncer.EmptyLeaseTableSynchronizer();
+
+        final List<Lease> newLeases = determineNewLeasesToCreate(emptyLeaseTableSynchronizer,
+                shards, currentLeases, INITIAL_POSITION_LATEST, new HashSet<>(), SINGLE_STREAM_UPGRADE_MODE_ARGS);
         validateLeases(newLeases, toMultiStreamLeases(shardId0, shardId1));
     }
 
@@ -281,6 +318,38 @@ public class HierarchicalShardSyncerTest {
 
         final List<Lease> newLeases = determineNewLeasesToCreate(leaseSynchronizer, shards, currentLeases,
                 INITIAL_POSITION_LATEST, inconsistentShardIds, MULTI_STREAM_ARGS);
+        validateLeases(newLeases, toMultiStreamLeases(shardId0, shardId1));
+    }
+
+    /**
+     * Test determineNewLeasesToCreate() where there are no leases and no resharding operations have been performed, but
+     * one of the shards was marked as inconsistent.
+     */
+    @Test
+    public void testDetermineNewLeasesToCreate0Leases0Reshards1InconsistentSingleStreamUpgradeMode() {
+        final String shardId0 = "shardId-0";
+        final String shardId1 = "shardId-1";
+        final String shardId2 = "shardId-2";
+        final String shardId3 = "shardId-3";
+        final SequenceNumberRange sequenceRange = ShardObjectHelper.newSequenceNumberRange("342980", null);
+
+        final List<Shard> shardsWithLeases = Arrays.asList(ShardObjectHelper.newShard(shardId3, null, null, sequenceRange));
+        final List<Shard> shardsWithoutLeases = Arrays.asList(ShardObjectHelper.newShard(shardId0, null, null, sequenceRange),
+                ShardObjectHelper.newShard(shardId1, null, null, sequenceRange),
+                ShardObjectHelper.newShard(shardId2, shardId1, null, sequenceRange));
+
+        final List<Shard> shards = Stream.of(shardsWithLeases, shardsWithoutLeases).flatMap(x -> x.stream()).collect(Collectors.toList());
+        final List<Lease> currentLeases = new ArrayList<>(createMultiStreamLeasesFromShards(shardsWithLeases,
+                ExtendedSequenceNumber.LATEST, "foo"));
+        final Set<String> inconsistentShardIds = new HashSet<>(Collections.singletonList(shardId2));
+
+        Map<String, Shard> shardIdToShardMap = HierarchicalShardSyncer.constructShardIdToShardMap(shards);
+        Map<String, Set<String>> shardIdToChildShardIdsMap = HierarchicalShardSyncer.constructShardIdToChildShardIdsMap(shardIdToShardMap);
+        final HierarchicalShardSyncer.LeaseSynchronizer leaseSynchronizer =
+                new HierarchicalShardSyncer.NonEmptyLeaseTableSynchronizer(shardDetector, shardIdToShardMap, shardIdToChildShardIdsMap);
+
+        final List<Lease> newLeases = determineNewLeasesToCreate(leaseSynchronizer, shards, currentLeases,
+                INITIAL_POSITION_LATEST, inconsistentShardIds, SINGLE_STREAM_UPGRADE_MODE_ARGS);
         validateLeases(newLeases, toMultiStreamLeases(shardId0, shardId1));
     }
 
@@ -2380,6 +2449,72 @@ public class HierarchicalShardSyncerTest {
         verify(dynamoDBLeaseRefresher, times(2)).createLeaseIfNotExists(any(Lease.class));
     }
 
+    @Test
+    public void testCreateLeaseForChildShardInSingleStreamMode() throws Exception {
+        final List<String> parentShards = Arrays.asList("parent");
+
+        ChildShard child = ChildShard.builder()
+                .shardId("child")
+                .parentShards(parentShards)
+                .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
+                .build();
+
+        Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.singleStreamInstance("stream"));
+
+        assertTrue(lease instanceof Lease);
+        assertFalse(lease instanceof MultiStreamLease);
+    }
+
+    @Test
+    public void testCreateLeaseForChildShardInSingleStreamCompatibleMode() throws Exception {
+        hierarchicalShardSyncer = new HierarchicalShardSyncer(StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE, "stream");
+        final List<String> parentShards = Arrays.asList("parent");
+
+        ChildShard child = ChildShard.builder()
+                .shardId("child")
+                .parentShards(parentShards)
+                .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
+                .build();
+
+        Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.singleStreamInstance("stream"));
+
+        assertTrue(lease instanceof Lease);
+        assertFalse(lease instanceof MultiStreamLease);
+    }
+
+    @Test
+    public void testCreateLeaseForChildShardInSingleStreamUpgradeMode() throws Exception {
+        hierarchicalShardSyncer = new HierarchicalShardSyncer(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE, STREAM_IDENTIFIER);
+        final List<String> parentShards = Arrays.asList("parent");
+
+        ChildShard child = ChildShard.builder()
+                .shardId("child")
+                .parentShards(parentShards)
+                .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
+                .build();
+
+        Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
+
+        assertTrue(lease instanceof Lease);
+        assertTrue(lease instanceof MultiStreamLease);
+    }
+
+    @Test
+    public void testCreateLeaseForChildShardInMultiStreamMode() throws Exception {
+        hierarchicalShardSyncer = new HierarchicalShardSyncer(StreamProcessingMode.MULTI_STREAM_MODE, STREAM_IDENTIFIER);
+        final List<String> parentShards = Arrays.asList("parent");
+
+        ChildShard child = ChildShard.builder()
+                .shardId("child")
+                .parentShards(parentShards)
+                .hashKeyRange(ShardObjectHelper.newHashKeyRange("0", "99"))
+                .build();
+
+        Lease lease = hierarchicalShardSyncer.createLeaseForChildShard(child, StreamIdentifier.multiStreamInstance(STREAM_IDENTIFIER));
+
+        assertTrue(lease instanceof Lease);
+        assertTrue(lease instanceof MultiStreamLease);
+    }
 //    /**
 //     * Test CheckIfDescendantAndAddNewLeasesForAncestors - two parents, there is a lease for one parent.
 //     */

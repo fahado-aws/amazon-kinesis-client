@@ -60,6 +60,10 @@ public class TestRecordProcessor implements ShardRecordProcessor {
                 recordValidator.add(recordValidatorKey, data);
             }
 
+            processRecordsInput.checkpointer().checkpoint();
+
+        } catch (ShutdownException | InvalidStateException e) {
+            log.error("Exception while checkpointing at records processed. Giving up.", e);
         } catch (Throwable t) {
             log.error("Caught throwable while processing records. Aborting.", t);
             Runtime.getRuntime().halt(1);

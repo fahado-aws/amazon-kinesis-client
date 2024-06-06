@@ -243,4 +243,18 @@ public interface LeaseRefresher {
      */
     ExtendedSequenceNumber getCheckpoint(String leaseKey)
             throws ProvisionedThroughputException, InvalidStateException, DependencyException;
+
+    /**
+     * Replaces old lease record with a new lease record.
+     * @param oldLease Old lease which is to be deleted
+     * @param newLease New lease which is to be created
+     * @return
+     * @throws DependencyException
+     * @throws InvalidStateException
+     * @throws ProvisionedThroughputException
+     */
+    default boolean replaceLease(Lease oldLease, Lease newLease)
+            throws DependencyException, InvalidStateException, ProvisionedThroughputException {
+        throw new UnsupportedOperationException();
+    }
 }

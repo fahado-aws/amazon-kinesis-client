@@ -43,6 +43,7 @@ import software.amazon.kinesis.leases.dynamodb.DynamoDBLeaseManagementFactory;
 import software.amazon.kinesis.leases.dynamodb.TableCreatorCallback;
 import software.amazon.kinesis.metrics.MetricsFactory;
 import software.amazon.kinesis.metrics.NullMetricsFactory;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
 /**
  * Used by the KCL to configure lease management.
@@ -374,6 +375,7 @@ public class LeaseManagementConfig {
      * @param isMultiStreamingMode
      * @return LeaseManagementFactory
      */
+    @Deprecated
     public LeaseManagementFactory leaseManagementFactory(final LeaseSerializer leaseSerializer, boolean isMultiStreamingMode) {
         if (leaseManagementFactory == null) {
             leaseManagementFactory = new DynamoDBLeaseManagementFactory(kinesisClient(),
@@ -408,6 +410,51 @@ public class LeaseManagementConfig {
                     customShardDetectorProvider(),
                     isMultiStreamingMode,
                     leaseCleanupConfig());
+        }
+        return leaseManagementFactory;
+    }
+
+    /**
+     * Vends LeaseManagementFactory that performs serde based on leaseSerializer and shard sync based on isMultiStreamingMode
+     * @param leaseSerializer
+     * @param streamProcessingMode
+     * @return LeaseManagementFactory
+     */
+    public LeaseManagementFactory leaseManagementFactory(final LeaseSerializer leaseSerializer, StreamProcessingMode streamProcessingMode) {
+        if (leaseManagementFactory == null) {
+            leaseManagementFactory = new DynamoDBLeaseManagementFactory(kinesisClient(),
+                    dynamoDBClient(),
+                    tableName(),
+                    workerIdentifier(),
+                    executorService(),
+                    failoverTimeMillis(),
+                    enablePriorityLeaseAssignment(),
+                    epsilonMillis(),
+                    maxLeasesForWorker(),
+                    maxLeasesToStealAtOneTime(),
+                    maxLeaseRenewalThreads(),
+                    cleanupLeasesUponShardCompletion(),
+                    ignoreUnexpectedChildShards(),
+                    shardSyncIntervalMillis(),
+                    consistentReads(),
+                    listShardsBackoffTimeInMillis(),
+                    maxListShardsRetryAttempts(),
+                    maxCacheMissesBeforeReload(),
+                    listShardsCacheAllowedAgeInSeconds(),
+                    cacheMissWarningModulus(),
+                    initialLeaseTableReadCapacity(),
+                    initialLeaseTableWriteCapacity(),
+                    hierarchicalShardSyncer(),
+                    tableCreatorCallback(),
+                    dynamoDbRequestTimeout(),
+                    billingMode(),
+                    leaseTableDeletionProtectionEnabled(),
+                    tags(),
+                    leaseSerializer,
+                    customShardDetectorProvider(),
+                    StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode,
+                    leaseCleanupConfig(),
+                    streamProcessingMode);
         }
         return leaseManagementFactory;
     }
