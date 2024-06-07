@@ -732,8 +732,7 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
                 maxLeaseRenewalThreads,
                 initialLeaseTableReadCapacity,
                 initialLeaseTableWriteCapacity,
-                metricsFactory,
-                streamProcessingMode);
+                metricsFactory);
     }
 
     @Override @Deprecated
