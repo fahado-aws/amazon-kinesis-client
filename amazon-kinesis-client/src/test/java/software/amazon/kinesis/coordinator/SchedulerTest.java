@@ -34,6 +34,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.internal.verification.VerificationModeFactory.atMost;
 
@@ -73,6 +74,7 @@ import org.mockito.stubbing.OngoingStubbing;
 import software.amazon.awssdk.arns.Arn;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient;
+import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisServiceClientConfiguration;
@@ -109,6 +111,8 @@ import software.amazon.kinesis.lifecycle.events.ProcessRecordsInput;
 import software.amazon.kinesis.lifecycle.events.ShardEndedInput;
 import software.amazon.kinesis.lifecycle.events.ShutdownRequestedInput;
 import software.amazon.kinesis.metrics.MetricsFactory;
+import software.amazon.kinesis.metrics.MetricsLevel;
+import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsConfig;
 import software.amazon.kinesis.processor.Checkpointer;
 import software.amazon.kinesis.processor.FormerStreamsLeasesDeletionStrategy;
@@ -184,6 +188,10 @@ public class SchedulerTest {
     private TestMultiStreamTracker multiStreamTracker;
     @Mock
     private LeaseCleanupManager leaseCleanupManager;
+    @Mock
+    MetricsFactory metricsFactory;
+    @Mock
+    MetricsScope metricsScope;
 
     private Map<StreamIdentifier, ShardSyncTaskManager> shardSyncTaskManagerMap;
     private Map<StreamIdentifier, ShardDetector> shardDetectorMap;
@@ -1214,6 +1222,24 @@ public class SchedulerTest {
 
     private static String constructStreamArnStr(Region region, long accountId, String streamName) {
         return "arn:aws:kinesis:" + region + ":" + accountId + ":stream/" + streamName;
+    }
+
+    @Test
+    public void testEmitWorkerMetrics() {
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        when(scheduler.shouldEmitWorkerMetrics()).thenReturn(true);
+
+        scheduler.emitWorkerMetrics();
+
+        verify(metricsScope).addDimension("Operation", "WorkerInfo");
+        verify(metricsScope).addData("SingleStreamMode", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addDimension("WorkerIdentifier", "workerIdentifier");
+        verify(metricsScope).end();
+        verifyNoMoreInteractions(metricsScope);
     }
 
     /*private void runAndTestWorker(int numShards, int threadPoolSize) throws Exception {
