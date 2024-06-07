@@ -936,21 +936,6 @@ public class HierarchicalShardSyncer {
                     .map(streamId -> streamId.serialize()).orElse("");
             final Set<String> shardIdsOfCurrentLeases = currentLeases.stream()
                     .peek(lease -> log.debug("{} : Existing lease: {}", streamIdentifier, lease))
-                    .filter(lease -> {
-                        if (lease instanceof MultiStreamLease) {
-                            if (StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE == multiStreamArgs.streamProcessingMode()
-                                || StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == multiStreamArgs.streamProcessingMode()) {
-                                MultiStreamLease multiStreamLease = (MultiStreamLease) lease;
-                                // In compatibility and upgrade mode we make sure that the stream identifier in configuration
-                                // matches the lease stream identifier.
-                                return multiStreamArgs.streamIdentifier.serialize().equals(multiStreamLease.streamIdentifier());
-                            } else {
-                                return true;
-                            }
-                        } else {
-                            return true;
-                        }
-                    })
                     .map(lease -> getShardIdFromLease(lease, multiStreamArgs))
                     .collect(Collectors.toSet());
 

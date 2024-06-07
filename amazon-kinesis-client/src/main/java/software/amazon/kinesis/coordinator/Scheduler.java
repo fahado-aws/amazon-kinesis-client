@@ -306,10 +306,10 @@ public class Scheduler implements Runnable {
         this.schedulerInitializationBackoffTimeMillis = this.coordinatorConfig.schedulerInitializationBackoffTimeMillis();
         this.leaderElectedPeriodicShardSyncManager = new PeriodicShardSyncManager(
                 leaseManagementConfig.workerIdentifier(), leaderDecider, leaseRefresher, currentStreamConfigMap,
-                shardSyncTaskManagerProvider, streamToShardSyncTaskManagerMap, metricsFactory,
+                shardSyncTaskManagerProvider, streamToShardSyncTaskManagerMap, isMultiStreamMode, metricsFactory,
                 leaseManagementConfig.leasesRecoveryAuditorExecutionFrequencyMillis(),
                 leaseManagementConfig.leasesRecoveryAuditorInconsistencyConfidenceThreshold(),
-                leaderSynced, streamProcessingMode);
+                leaderSynced);
         this.leaseCleanupManager = this.leaseManagementConfig.leaseManagementFactory(leaseSerializer, streamProcessingMode)
                 .createLeaseCleanupManager(metricsFactory, currentStreamConfigMap);
         this.schemaRegistryDecoder =

@@ -30,11 +30,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-
-import javax.annotation.Nullable;
-
 import lombok.extern.slf4j.Slf4j;
-import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
 import software.amazon.kinesis.common.StreamConfig;
 import software.amazon.kinesis.common.StreamIdentifier;
@@ -83,8 +79,6 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
     private long initialLeaseTableReadCapacity;
     private long initialLeaseTableWriteCapacity;
     protected final MetricsFactory metricsFactory;
-    @Nullable
-    private final StreamProcessingMode streamProcessingMode;
 
     private final Object shutdownLock = new Object();
 
@@ -269,7 +263,6 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
         }
         this.initialLeaseTableWriteCapacity = initialLeaseTableWriteCapacity;
         this.metricsFactory = metricsFactory;
-        this.streamProcessingMode = streamProcessingMode;
 
         log.info("With failover time {} ms and epsilon {} ms, LeaseCoordinator will renew leases every {} ms, take"
                         + "leases every {} ms, process maximum of {} leases and steal {} lease(s) at a time.",
@@ -367,12 +360,6 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
         } finally {
             MetricsUtil.addWorkerIdentifier(scope, workerIdentifier());
             MetricsUtil.addSuccessAndLatency(scope, success, startTime, MetricsLevel.SUMMARY);
-            if (StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE == streamProcessingMode) {
-                scope.addData("SingleStreamCompatibleMode", 1, StandardUnit.COUNT, MetricsLevel.SUMMARY);
-            }
-            if (StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == streamProcessingMode) {
-                scope.addData("SingleStreamUpgradeMode", 1, StandardUnit.COUNT, MetricsLevel.SUMMARY);
-            }
             MetricsUtil.endScope(scope);
         }
     }
