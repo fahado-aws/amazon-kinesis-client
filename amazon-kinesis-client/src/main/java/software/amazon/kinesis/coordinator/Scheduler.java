@@ -117,12 +117,14 @@ public class Scheduler implements Runnable {
     private static final long MIN_WAIT_TIME_FOR_LEASE_TABLE_CHECK_MILLIS = 1000L;
     private static final long MAX_WAIT_TIME_FOR_LEASE_TABLE_CHECK_MILLIS = 30 * 1000L;
     private static final long NEW_STREAM_CHECK_INTERVAL_MILLIS = 60_000L;
+    private static final long EMIT_WORKER_METRICS_INTERVAL_MILLIS = 60_000L;
     private static final boolean SHOULD_DO_LEASE_SYNC_FOR_OLD_STREAMS = false;
     private static final String MULTI_STREAM_TRACKER = "MultiStreamTracker";
     private static final String ACTIVE_STREAMS_COUNT = "ActiveStreams.Count";
     private static final String PENDING_STREAMS_DELETION_COUNT = "StreamsPendingDeletion.Count";
     private static final String DELETED_STREAMS_COUNT = "DeletedStreams.Count";
     private static final String NON_EXISTING_STREAM_DELETE_COUNT = "NonExistingStreamDelete.Count";
+    private static final String WORKER_INFO = "WorkerInfo";
 
     private final SchedulerLog slog = new SchedulerLog();
 
@@ -158,6 +160,7 @@ public class Scheduler implements Runnable {
     private final long taskBackoffTimeMillis;
     private final boolean isMultiStreamMode;
     private final Map<StreamIdentifier, StreamConfig> currentStreamConfigMap = new StreamConfigMap();
+    @Getter(AccessLevel.PROTECTED)
     private final StreamProcessingMode streamProcessingMode;
     private final StreamTracker streamTracker;
     private final FormerStreamsLeasesDeletionStrategy formerStreamsLeasesDeletionStrategy;
@@ -206,6 +209,7 @@ public class Scheduler implements Runnable {
 
     @VisibleForTesting
     protected boolean gracefuleShutdownStarted = false;
+    private final Stopwatch emitWorkerMetricsWatch = Stopwatch.createUnstarted();
 
     public Scheduler(@NonNull final CheckpointConfig checkpointConfig,
                      @NonNull final CoordinatorConfig coordinatorConfig,
@@ -379,6 +383,7 @@ public class Scheduler implements Runnable {
                     log.info("Scheduling periodicShardSync");
                     leaderElectedPeriodicShardSyncManager.start();
                     streamSyncWatch.start();
+                    emitWorkerMetricsWatch.start();
                     isDone = true;
                 } catch (Exception e) {
                     log.error("Caught exception when initializing LeaseCoordinator", e);
@@ -441,6 +446,7 @@ public class Scheduler implements Runnable {
                 leaderSynced.set(false);
             }
 
+            emitWorkerMetrics();
             logExecutorState();
             slog.info("Sleeping ...");
             Thread.sleep(shardConsumerDispatchPollIntervalMillis);
@@ -1088,6 +1094,22 @@ public class Scheduler implements Runnable {
 
         return new StreamConfig(
                 streamIdentifierWithArn, streamConfig.initialPositionInStreamExtended(), streamConfig.consumerArn());
+    }
+
+    @VisibleForTesting
+    boolean shouldEmitWorkerMetrics() {
+        return (emitWorkerMetricsWatch.elapsed(TimeUnit.MILLISECONDS) > EMIT_WORKER_METRICS_INTERVAL_MILLIS);
+    }
+
+    @VisibleForTesting
+    void emitWorkerMetrics() {
+        if (shouldEmitWorkerMetrics()) {
+            final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, WORKER_INFO);
+            MetricsUtil.addCount(metricsScope, streamProcessingMode.metricName(), 1, MetricsLevel.DETAILED);
+            MetricsUtil.addWorkerIdentifier(metricsScope, leaseManagementConfig.workerIdentifier());
+            MetricsUtil.endScope(metricsScope);
+            emitWorkerMetricsWatch.reset().start();
+        }
     }
 
     @RequiredArgsConstructor
