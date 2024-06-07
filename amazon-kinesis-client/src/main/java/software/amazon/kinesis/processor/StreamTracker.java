@@ -90,7 +90,12 @@ public interface StreamTracker {
          * Therefore KCL uses an efficient lease structure by not persisting
          * stream identifier into DDB Lease table.
          */
-        SINGLE_STREAM_MODE,
+        SINGLE_STREAM_MODE {
+            @Override
+            public String metricName() {
+                return "SingleStreamMode";
+            }
+        },
 
         /**
          * This is essentially same as SINGLE_STREAM_MODE, however
@@ -100,14 +105,24 @@ public interface StreamTracker {
          * used by the SINGLE_STREAM_MODE and the MULTI_STREAM_MODE
          * operation
          */
-        SINGLE_STREAM_COMPATIBLE_MODE,
+        SINGLE_STREAM_COMPATIBLE_MODE {
+            @Override
+            public String metricName() {
+                return "SingleStreamCompatibleMode";
+            }
+        },
 
         /**
          * This is also essentially same as SINGLE_STREAM_MODE where KCL
          * processes a single stream for the application. However this
          * wold be the phase 2 change to make to smoothly upgrade to
          */
-        SINGLE_STREAM_UPGRADE_MODE,
+        SINGLE_STREAM_UPGRADE_MODE {
+            @Override
+            public String metricName() {
+                return "SingleStreamUpgradeMode";
+            }
+        },
 
         /**
          * KCL application is processing multiple streams, therefore
@@ -116,7 +131,13 @@ public interface StreamTracker {
          * to which stream, by persisting the stream identifier for each
          * lease in DDB.
          */
-        MULTI_STREAM_MODE
+        MULTI_STREAM_MODE {
+            @Override
+            public String metricName() {
+                return "MultiStreamStreamMode";
+            }
+        };
+        public abstract String metricName();
     }
 
     /**

@@ -36,6 +36,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.internal.verification.VerificationModeFactory.atMost;
 
@@ -1266,6 +1267,7 @@ public class SchedulerTest {
         scheduler.runProcessLoop();
 
         verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
         verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease1), eq(expectedMultiStreamLease1));
         verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease2), eq(expectedMultiStreamLease2));
         verify(leaseCoordinator).addLeasesToRenew(eq(expectedNewLeases));
@@ -1275,6 +1277,7 @@ public class SchedulerTest {
         verify(metricsScope).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         verify(metricsScope).addData("NumUpgradedLeases", expectedNewLeases.size(), StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).end();
     }
 
     @Test
@@ -1327,6 +1330,7 @@ public class SchedulerTest {
         scheduler.runProcessLoop();
 
         verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
         verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease1), eq(expectedMultiStreamLease1));
         verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease2), eq(expectedMultiStreamLease2));
         verify(leaseCoordinator).addLeasesToRenew(eq(expectedNewLeases));
@@ -1336,6 +1340,7 @@ public class SchedulerTest {
         verify(metricsScope).addData("Success", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         verify(metricsScope).addData("NumUpgradedLeases", expectedNewLeases.size(), StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).end();
     }
 
     @SneakyThrows
@@ -1360,6 +1365,7 @@ public class SchedulerTest {
         scheduler.runProcessLoop();
 
         verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
         verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
         verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
         verify(leaseCoordinator, times(0)).dropLeases(any());
@@ -1367,6 +1373,7 @@ public class SchedulerTest {
         verify(metricsScope).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         verify(metricsScope).addData("NumUpgradedLeases", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).end();
     }
 
     @Test
@@ -1397,6 +1404,24 @@ public class SchedulerTest {
         assertEquals(lease.childShardIds(), multiStreamLease.childShardIds());
         assertEquals(lease.pendingCheckpointState(), multiStreamLease.pendingCheckpointState());
         assertEquals(lease.hashKeyRangeForLease(), multiStreamLease.hashKeyRangeForLease());
+    }
+
+    @Test
+    public void testEmitWorkerMetrics() {
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        when(scheduler.shouldEmitWorkerMetrics()).thenReturn(true);
+
+        scheduler.emitWorkerMetrics();
+
+        verify(metricsScope).addDimension("Operation", "WorkerInfo");
+        verify(metricsScope).addData("SingleStreamMode", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addDimension("WorkerIdentifier", "workerIdentifier");
+        verify(metricsScope).end();
+        verifyNoMoreInteractions(metricsScope);
     }
 
     /*private void runAndTestWorker(int numShards, int threadPoolSize) throws Exception {
