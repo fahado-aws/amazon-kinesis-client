@@ -31,9 +31,11 @@ import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
+import software.amazon.kinesis.checkpoint.SentinelCheckpoint;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseRefresher;
 import software.amazon.kinesis.leases.LeaseTaker;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
@@ -395,6 +397,17 @@ public class DynamoDBLeaseTaker implements LeaseTaker {
         final int numAvailableLeases = availableLeases.size();
         final int numLeases =  allLeases.size();
         final int numWorkers = leaseCounts.size();
+        int numSingleStreamLeases = 0;
+        int numMultiStreamLeases = 0;
+        for (Lease lease : allLeases.values()) {
+            boolean isActiveLease = lease.checkpoint() == null ||
+                !SentinelCheckpoint.SHARD_END.toString().equals(lease.checkpoint().sequenceNumber());
+            if (lease instanceof MultiStreamLease) {
+                numMultiStreamLeases += isActiveLease ? 1 : 0;
+            } else {
+                numSingleStreamLeases += isActiveLease ? 1 : 0;
+            }
+        }
         int numLeasesToReachTarget = 0;
         int leaseSpillover = 0;
         int veryOldLeaseCount = 0;
@@ -500,6 +513,8 @@ public class DynamoDBLeaseTaker implements LeaseTaker {
             scope.addData("NumWorkers", numWorkers, StandardUnit.COUNT, MetricsLevel.SUMMARY);
             scope.addData("TotalLeases", numLeases, StandardUnit.COUNT, MetricsLevel.DETAILED);
             scope.addData("VeryOldLeases", veryOldLeaseCount, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+            scope.addData("NumSingleStreamLeases", numSingleStreamLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+            scope.addData("NumMultiStreamLeases", numMultiStreamLeases, StandardUnit.COUNT, MetricsLevel.SUMMARY);
 
             MetricsUtil.endScope(scope);
         }
