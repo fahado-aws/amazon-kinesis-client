@@ -34,13 +34,19 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
+
+import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseRefresher;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.metrics.MetricsFactory;
+import software.amazon.kinesis.metrics.MetricsLevel;
+import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.NullMetricsScope;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @RunWith(MockitoJUnitRunner.class)
@@ -60,6 +66,8 @@ public class DynamoDBLeaseTakerTest {
     private MetricsFactory metricsFactory;
     @Mock
     private Callable<Long> timeProvider;
+    @Mock
+    private MetricsScope metricsScope;
 
     @Before
     public void setup() {
@@ -72,10 +80,10 @@ public class DynamoDBLeaseTakerTest {
     @Test
     public final void testStringJoin() {
         List<String> strings = new ArrayList<>();
-        
+
         strings.add("foo");
         Assert.assertEquals("foo", DynamoDBLeaseTaker.stringJoin(strings, ", "));
-        
+
         strings.add("bar");
         Assert.assertEquals("foo, bar", DynamoDBLeaseTaker.stringJoin(strings, ", "));
     }
@@ -143,13 +151,24 @@ public class DynamoDBLeaseTakerTest {
         dynamoDBLeaseTakerWithCustomMultiplier.allLeases.putAll(
                 allLeases.stream().collect(Collectors.toMap(Lease::leaseKey, Function.identity())));
         when(leaseRefresher.listLeases()).thenReturn(allLeases);
-        when(metricsFactory.createMetrics()).thenReturn(new NullMetricsScope());
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
         when(timeProvider.call()).thenReturn(MOCK_CURRENT_TIME);
 
         Set<Lease> output = dynamoDBLeaseTakerWithCustomMultiplier.computeLeasesToTake(expiredLeases, timeProvider);
         final Set<Lease> expectedOutput = new HashSet<>();
         expectedOutput.add(allLeases.get(1));
         assertEquals(expectedOutput, output);
+        verify(metricsScope).addDimension("Operation", "TakeLeases");
+        verify(metricsScope).addData("ExpiredLeases", 2, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("LeaseSpillover", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("LeasesToTake", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("NeededLeases", 2, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("NumWorkers", 1, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("TotalLeases", 3, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("VeryOldLeases", 1, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("NumSingleStreamLeases", 3, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("NumMultiStreamLeases", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).end();
     }
 
     @Test
@@ -171,7 +190,7 @@ public class DynamoDBLeaseTakerTest {
         dynamoDBLeaseTakerWithDisabledPriorityLeaseAssignment.allLeases.putAll(
                 allLeases.stream().collect(Collectors.toMap(Lease::leaseKey, Function.identity())));
         when(leaseRefresher.listLeases()).thenReturn(allLeases);
-        when(metricsFactory.createMetrics()).thenReturn(new NullMetricsScope());
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
         when(timeProvider.call()).thenReturn(MOCK_CURRENT_TIME);
 
         Set<Lease> output = dynamoDBLeaseTakerWithDisabledPriorityLeaseAssignment.computeLeasesToTake(expiredLeases, timeProvider);
@@ -180,6 +199,58 @@ public class DynamoDBLeaseTakerTest {
         expectedOutput.add(createLease("baz", "6", veryOldThreshold + 1));
         expectedOutput.add(createLease(null, "7"));
         assertEquals(expectedOutput, output);
+        verify(metricsScope).addDimension("Operation", "TakeLeases");
+        verify(metricsScope).addData("ExpiredLeases", 3, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("LeaseSpillover", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("LeasesToTake", 3, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("NeededLeases", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("NumWorkers", 2, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("TotalLeases", 6, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("VeryOldLeases", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("NumSingleStreamLeases", 6, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("NumMultiStreamLeases", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).end();
+    }
+
+    @Test
+    public void test_computesCorrectLeasesWhenInMultistreamFormat() throws Exception {
+        long veryOldThreshold = MOCK_CURRENT_TIME -
+                (TimeUnit.MILLISECONDS.toNanos(LEASE_DURATION_MILLIS) * DEFAULT_VERY_OLD_LEASE_DURATION_MULTIPLIER);
+        DynamoDBLeaseTaker dynamoDBLeaseTaker =
+                new DynamoDBLeaseTaker(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS, metricsFactory)
+                        .withEnablePriorityLeaseAssignment(false);
+        final List<Lease> allLeases = new ArrayList<>();
+        allLeases.add(createLease("bar", "2", MOCK_CURRENT_TIME));
+        allLeases.add(createMultiStreamLease("bar", "3", "stream-1", MOCK_CURRENT_TIME, ExtendedSequenceNumber.TRIM_HORIZON));
+        allLeases.add(createMultiStreamLease("bar", "4", "stream-2", MOCK_CURRENT_TIME, ExtendedSequenceNumber.SHARD_END));
+        allLeases.add(createLease("baz", "5", veryOldThreshold - 1));
+        allLeases.add(createMultiStreamLease("baz", "6", "stream-1", veryOldThreshold + 1, ExtendedSequenceNumber.TRIM_HORIZON));
+        allLeases.add(createMultiStreamLease(null, "7", "stream-1", 0L, ExtendedSequenceNumber.TRIM_HORIZON));
+        final List<Lease> expiredLeases = allLeases.subList(3, 6);
+
+        dynamoDBLeaseTaker.allLeases.putAll(
+                allLeases.stream().collect(Collectors.toMap(Lease::leaseKey, Function.identity())));
+        when(leaseRefresher.listLeases()).thenReturn(allLeases);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        when(timeProvider.call()).thenReturn(MOCK_CURRENT_TIME);
+
+        Set<Lease> output = dynamoDBLeaseTaker.computeLeasesToTake(expiredLeases, timeProvider);
+        final Set<Lease> expectedOutput = new HashSet<>();
+        expectedOutput.add(createLease("baz", "5", veryOldThreshold - 1));
+        expectedOutput.add(createMultiStreamLease("baz", "6", "stream-1", veryOldThreshold + 1, ExtendedSequenceNumber.TRIM_HORIZON));
+        expectedOutput.add(createMultiStreamLease(null, "7", "stream-1", 0L, ExtendedSequenceNumber.TRIM_HORIZON));
+        assertEquals(expectedOutput, output);
+        verify(metricsScope).addDimension("Operation", "TakeLeases");
+        verify(metricsScope).addData("ExpiredLeases", 3, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("LeaseSpillover", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("LeasesToTake", 3, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("NeededLeases", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("NumWorkers", 2, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("TotalLeases", 6, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("VeryOldLeases", 0, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("NumSingleStreamLeases", 2, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).addData("NumMultiStreamLeases", 3, StandardUnit.COUNT, MetricsLevel.SUMMARY);
+        verify(metricsScope).end();
     }
 
     private Lease createLease(String leaseOwner, String leaseKey) {
@@ -204,6 +275,22 @@ public class DynamoDBLeaseTakerTest {
         lease.childShardIds(new HashSet<>());
         lease.leaseKey(leaseKey);
         lease.lastCounterIncrementNanos(lastCounterIncrementNanos);
+        return lease;
+    }
+
+    private Lease createMultiStreamLease(String leaseOwner, String shardId, String streamIdentifier, long lastCounterIncrementNanos,
+        ExtendedSequenceNumber checkpoint) {
+        final MultiStreamLease lease = new MultiStreamLease();
+        lease.checkpoint(checkpoint);
+        lease.ownerSwitchesSinceCheckpoint(0L);
+        lease.leaseCounter(0L);
+        lease.leaseOwner(leaseOwner);
+        lease.parentShardIds(Collections.singleton("parentShardId"));
+        lease.childShardIds(new HashSet<>());
+        lease.leaseKey(String.join(":", streamIdentifier, shardId));
+        lease.lastCounterIncrementNanos(lastCounterIncrementNanos);
+        lease.streamIdentifier(streamIdentifier);
+        lease.shardId(shardId);
         return lease;
     }
 }
