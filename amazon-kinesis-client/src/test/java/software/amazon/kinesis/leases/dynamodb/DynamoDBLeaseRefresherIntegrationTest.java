@@ -29,11 +29,13 @@ import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseIntegrationTest;
 import software.amazon.kinesis.leases.UpdateField;
+import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doNothing;
@@ -373,5 +375,24 @@ public class DynamoDBLeaseRefresherIntegrationTest extends LeaseIntegrationTest 
         assertEquals(oldLease, persistedOldLease);
         Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
         assertEquals(existingNewLease, persistedNewLease);
+    }
+
+    @Test
+    public void testReplaceLease_ThrowsError_WhenLeaseCounterDoesNotMatch() throws LeasingException {
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        Lease oldLease = builder.withLease("1").build().get("1");
+        Lease renewedLease = oldLease.copy();
+        leaseRefresher.renewLease(renewedLease);
+        Lease newLease = new Lease("2", oldLease.leaseOwner(), oldLease.leaseCounter(), oldLease.concurrencyToken(),
+        oldLease.lastCounterIncrementNanos(), oldLease.checkpoint(), oldLease.pendingCheckpoint(),
+        oldLease.ownerSwitchesSinceCheckpoint(), oldLease.parentShardIds(), oldLease.childShardIds(),
+        oldLease.pendingCheckpointState(), oldLease.hashKeyRangeForLease());
+
+        assertThrows(InvalidStateException.class, () -> leaseRefresher.replaceLease(oldLease, newLease));
+
+        Lease persistedOldLease = leaseRefresher.getLease(oldLease.leaseKey());
+        assertEquals(renewedLease, persistedOldLease);
+        Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
+        assertNull(persistedNewLease);
     }
 }
