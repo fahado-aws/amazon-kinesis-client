@@ -69,6 +69,7 @@ public class DynamoDBLeaseSerializer implements LeaseSerializer {
     @Nullable
     private final StreamProcessingMode streamProcessingMode;
 
+    @Deprecated
     public DynamoDBLeaseSerializer() {
         this(null);
     }
