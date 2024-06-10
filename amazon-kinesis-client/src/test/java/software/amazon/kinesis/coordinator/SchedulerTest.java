@@ -131,6 +131,7 @@ import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.ProcessorConfig;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
 import software.amazon.kinesis.processor.SingleStreamCompatibleTracker;
+import software.amazon.kinesis.processor.SingleStreamTracker;
 import software.amazon.kinesis.processor.SingleStreamUpgradeTracker;
 import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.processor.ShardRecordProcessor;
@@ -1374,6 +1375,100 @@ public class SchedulerTest {
         verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         verify(metricsScope).addData("NumUpgradedLeases", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).end();
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeasesAreNotUpgradedInSingleStreamMode() {
+        retrievalConfig = new RetrievalConfig(kinesisClient, "stream-1", applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope, times(0)).addDimension("Operation", "UpgradeLeases");
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeasesAreNotUpgradedInSingleStreamCompatibleMode() {
+        StreamConfig streamConfig = createDummyStreamConfig(1);
+        SingleStreamCompatibleTracker streamTracker = new SingleStreamCompatibleTracker(streamConfig.streamIdentifier(), streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new MultiStreamLease();
+        lease1.leaseKey("shardId-001");
+        Lease lease2 = new MultiStreamLease();
+        lease2.leaseKey("111111111111:multiStreamTest-1:12345:shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope, times(0)).addDimension("Operation", "UpgradeLeases");
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeasesAreNotUpgradedInMultiStreamMode() {
+        List<StreamConfig> streamConfigList1 = IntStream.range(1, 5).mapToObj(streamId -> new StreamConfig(
+                StreamIdentifier.multiStreamInstance(
+                        Joiner.on(":").join(streamId * TEST_ACCOUNT, "multiStreamTest-" + streamId, streamId * 12345)),
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.LATEST)))
+                .collect(Collectors.toCollection(LinkedList::new));
+        List<StreamConfig> streamConfigList2 = IntStream.range(3, 5).mapToObj(streamId -> new StreamConfig(
+                StreamIdentifier.multiStreamInstance(
+                        Joiner.on(":").join(streamId * TEST_ACCOUNT, "multiStreamTest-" + streamId, streamId * 12345)),
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.LATEST)))
+                .collect(Collectors.toCollection(LinkedList::new));
+        retrievalConfig = new RetrievalConfig(kinesisClient, multiStreamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        when(multiStreamTracker.streamConfigList()).thenReturn(streamConfigList1, streamConfigList2);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new MultiStreamLease();
+        lease1.leaseKey("111111111111:multiStreamTest-1:12345:shardId-001");
+        Lease lease2 = new MultiStreamLease();
+        lease2.leaseKey("111111111111:multiStreamTest-2:12345:shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope, times(0)).addDimension("Operation", "UpgradeLeases");
     }
 
     @Test

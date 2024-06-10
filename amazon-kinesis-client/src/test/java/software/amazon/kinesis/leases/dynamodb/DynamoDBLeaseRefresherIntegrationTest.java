@@ -375,4 +375,23 @@ public class DynamoDBLeaseRefresherIntegrationTest extends LeaseIntegrationTest 
         Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
         assertEquals(existingNewLease, persistedNewLease);
     }
+
+    @Test
+    public void testReplaceLease_ThrowsError_WhenLeaseCounterDoesNotMatch() throws LeasingException {
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        Lease oldLease = builder.withLease("1").build().get("1");
+        Lease renewedLease = oldLease.copy();
+        leaseRefresher.renewLease(renewedLease);
+        Lease newLease = new Lease("2", oldLease.leaseOwner(), oldLease.leaseCounter(), oldLease.concurrencyToken(),
+        oldLease.lastCounterIncrementNanos(), oldLease.checkpoint(), oldLease.pendingCheckpoint(),
+        oldLease.ownerSwitchesSinceCheckpoint(), oldLease.parentShardIds(), oldLease.childShardIds(),
+        oldLease.pendingCheckpointState(), oldLease.hashKeyRangeForLease());
+
+        assertThrows(InvalidStateException.class, () -> leaseRefresher.replaceLease(oldLease, newLease));
+
+        Lease persistedOldLease = leaseRefresher.getLease(oldLease.leaseKey());
+        assertEquals(renewedLease, persistedOldLease);
+        Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
+        assertNull(persistedNewLease);
+    }
 }
