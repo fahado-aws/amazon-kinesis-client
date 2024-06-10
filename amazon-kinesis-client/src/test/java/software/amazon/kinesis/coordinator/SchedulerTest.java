@@ -123,6 +123,7 @@ import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.ProcessorConfig;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
 import software.amazon.kinesis.processor.SingleStreamCompatibleTracker;
+import software.amazon.kinesis.processor.SingleStreamTracker;
 import software.amazon.kinesis.processor.SingleStreamUpgradeTracker;
 import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.processor.ShardRecordProcessor;
@@ -372,7 +373,7 @@ public class SchedulerTest {
     public final void testSchedulerInstantiationInSingleStreamCompatibleMode() {
         String streamIdentifierSer = "123456789012:TestStream:12345";
         StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
-        StreamConfig streamConfig = new StreamConfig(streamIdentifier, 
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
                 InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
         SingleStreamCompatibleTracker singleStreamCompatibleTracker = new SingleStreamCompatibleTracker(streamIdentifier, streamConfig);
         retrievalConfig = new RetrievalConfig(kinesisClient, singleStreamCompatibleTracker, applicationName)
@@ -389,7 +390,7 @@ public class SchedulerTest {
     public final void testSchedulerInstantiationInSingleStreamUpgradeMode() {
         String streamIdentifierSer = "123456789012:TestStream:12345";
         StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
-        StreamConfig streamConfig = new StreamConfig(streamIdentifier, 
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
                 InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
         SingleStreamUpgradeTracker singleStreamUpgradeTracker = new SingleStreamUpgradeTracker(streamIdentifier, streamConfig);
         retrievalConfig = new RetrievalConfig(kinesisClient, singleStreamUpgradeTracker, applicationName)
@@ -1454,7 +1455,7 @@ public class SchedulerTest {
         }
 
         @Override
-        public LeaseCoordinator createLeaseCoordinator(MetricsFactory metricsFactory, Map<StreamIdentifier, 
+        public LeaseCoordinator createLeaseCoordinator(MetricsFactory metricsFactory, Map<StreamIdentifier,
                 StreamConfig> streamConfigMap) {
             return leaseCoordinator;
         }
@@ -1508,7 +1509,7 @@ public class SchedulerTest {
         }
 
         @Override
-        public LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory, 
+        public LeaseCleanupManager createLeaseCleanupManager(MetricsFactory metricsFactory,
                 Map<StreamIdentifier, StreamConfig> streamConfigMap) {
             return leaseCleanupManager;
         }

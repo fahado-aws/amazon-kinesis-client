@@ -27,6 +27,7 @@ import java.util.concurrent.Callable;
 
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseRenewer;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
@@ -58,12 +59,25 @@ public class TestHarnessBuilder {
         return withLease(shardId, "leaseOwner");
     }
 
+    public TestHarnessBuilder withMultiStreamLease(String shardId, String streamIdentifier) {
+        return withMultiStreamLease(shardId, "leaseOwner", streamIdentifier);
+    }
+
     public TestHarnessBuilder withLease(String shardId, String owner) {
         Lease lease = createLease(shardId, owner);
         Lease originalLease = createLease(shardId, owner);
 
         leases.put(shardId, lease);
         originalLeases.put(shardId, originalLease);
+        return this;
+    }
+
+    public TestHarnessBuilder withMultiStreamLease(String shardId, String owner, String streamIdentifier) {
+        Lease lease = createMultiStreamLease(shardId, owner, streamIdentifier);
+        Lease originalLease = createMultiStreamLease(shardId, owner, streamIdentifier);
+
+        leases.put(lease.leaseKey(), lease);
+        originalLeases.put(lease.leaseKey(), originalLease);
         return this;
     }
 
@@ -76,6 +90,21 @@ public class TestHarnessBuilder {
         lease.parentShardIds(Collections.singleton("parentShardId"));
         lease.childShardIds(new HashSet<>());
         lease.leaseKey(shardId);
+
+        return lease;
+    }
+
+    private Lease createMultiStreamLease(String shardId, String owner, String streamIdentifier) {
+        MultiStreamLease lease = new MultiStreamLease();
+        lease.checkpoint(new ExtendedSequenceNumber("checkpoint"));
+        lease.ownerSwitchesSinceCheckpoint(0L);
+        lease.leaseCounter(0L);
+        lease.leaseOwner(owner);
+        lease.parentShardIds(Collections.singleton("parentShardId"));
+        lease.childShardIds(new HashSet<>());
+        lease.shardId(shardId);
+        lease.streamIdentifier(streamIdentifier);
+        lease.leaseKey(MultiStreamLease.getLeaseKey(streamIdentifier, shardId));
 
         return lease;
     }
