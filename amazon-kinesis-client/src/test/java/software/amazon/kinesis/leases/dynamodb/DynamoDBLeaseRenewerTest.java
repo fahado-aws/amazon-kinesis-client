@@ -119,4 +119,5 @@ public class DynamoDBLeaseRenewerTest {
         // Clear the list to avoid triggering expectation mismatch in after().
         leasesToRenew.clear();
     }
+
 }

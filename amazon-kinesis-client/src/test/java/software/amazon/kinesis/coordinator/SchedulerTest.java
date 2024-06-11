@@ -23,23 +23,27 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyDouble;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Matchers.same;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.internal.verification.VerificationModeFactory.atMost;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -49,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -60,6 +65,8 @@ import com.google.common.collect.Sets;
 import io.reactivex.rxjava3.plugins.RxJavaPlugins;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
+
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -73,6 +80,7 @@ import org.mockito.stubbing.OngoingStubbing;
 import software.amazon.awssdk.arns.Arn;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient;
+import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisServiceClientConfiguration;
@@ -80,6 +88,7 @@ import software.amazon.awssdk.utils.StringUtils;
 import software.amazon.kinesis.checkpoint.Checkpoint;
 import software.amazon.kinesis.checkpoint.CheckpointConfig;
 import software.amazon.kinesis.checkpoint.CheckpointFactory;
+import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.common.InitialPositionInStream;
 import software.amazon.kinesis.common.InitialPositionInStreamExtended;
 import software.amazon.kinesis.common.StreamConfig;
@@ -88,6 +97,7 @@ import software.amazon.kinesis.exceptions.KinesisClientLibException;
 import software.amazon.kinesis.exceptions.KinesisClientLibNonRetryableException;
 import software.amazon.kinesis.leases.LeaseCleanupManager;
 import software.amazon.kinesis.leases.HierarchicalShardSyncer;
+import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseCoordinator;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
 import software.amazon.kinesis.leases.LeaseManagementFactory;
@@ -109,6 +119,8 @@ import software.amazon.kinesis.lifecycle.events.ProcessRecordsInput;
 import software.amazon.kinesis.lifecycle.events.ShardEndedInput;
 import software.amazon.kinesis.lifecycle.events.ShutdownRequestedInput;
 import software.amazon.kinesis.metrics.MetricsFactory;
+import software.amazon.kinesis.metrics.MetricsLevel;
+import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsConfig;
 import software.amazon.kinesis.processor.Checkpointer;
 import software.amazon.kinesis.processor.FormerStreamsLeasesDeletionStrategy;
@@ -118,6 +130,9 @@ import software.amazon.kinesis.processor.FormerStreamsLeasesDeletionStrategy.Pro
 import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.ProcessorConfig;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
+import software.amazon.kinesis.processor.SingleStreamCompatibleTracker;
+import software.amazon.kinesis.processor.SingleStreamUpgradeTracker;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.processor.ShardRecordProcessor;
 import software.amazon.kinesis.retrieval.RecordsPublisher;
 import software.amazon.kinesis.retrieval.RetrievalConfig;
@@ -181,6 +196,10 @@ public class SchedulerTest {
     private TestMultiStreamTracker multiStreamTracker;
     @Mock
     private LeaseCleanupManager leaseCleanupManager;
+    @Mock
+    private MetricsFactory metricsFactory;
+    @Mock
+    private MetricsScope metricsScope;
 
     private Map<StreamIdentifier, ShardSyncTaskManager> shardSyncTaskManagerMap;
     private Map<StreamIdentifier, ShardDetector> shardDetectorMap;
@@ -353,6 +372,42 @@ public class SchedulerTest {
                 .forEach(shardDetector -> verify(shardDetector, times(1)).listShards());
         shardSyncTaskManagerMap.values()
                 .forEach(shardSyncTM -> verify(shardSyncTM, times(1)).hierarchicalShardSyncer());
+        assertEquals(true, scheduler.isMultiStreamMode());
+        assertEquals(StreamProcessingMode.MULTI_STREAM_MODE, scheduler.streamProcessingMode());
+    }
+
+    @Test
+    public final void testSchedulerInstantiationInSingleStreamCompatibleMode() {
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        SingleStreamCompatibleTracker singleStreamCompatibleTracker = new SingleStreamCompatibleTracker(streamIdentifier, streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, singleStreamCompatibleTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        leaseManagementConfig = new LeaseManagementConfig(tableName, dynamoDBClient, kinesisClient,
+                                                          workerIdentifier).leaseManagementFactory(new TestKinesisLeaseManagementFactory(true, true));
+        scheduler = new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig);
+        assertEquals(false, scheduler.isMultiStreamMode());
+        assertEquals(StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE, scheduler.streamProcessingMode());
+    }
+
+    @Test
+    public final void testSchedulerInstantiationInSingleStreamUpgradeMode() {
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        SingleStreamUpgradeTracker singleStreamUpgradeTracker = new SingleStreamUpgradeTracker(streamIdentifier, streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, singleStreamUpgradeTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        leaseManagementConfig = new LeaseManagementConfig(tableName, dynamoDBClient, kinesisClient,
+                                                          workerIdentifier).leaseManagementFactory(new TestKinesisLeaseManagementFactory(true, true));
+        scheduler = new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig);
+        assertEquals(false, scheduler.isMultiStreamMode());
+        assertEquals(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE, scheduler.streamProcessingMode());
     }
 
     @Test
@@ -1175,6 +1230,292 @@ public class SchedulerTest {
 
     private static String constructStreamArnStr(Region region, long accountId, String streamName) {
         return "arn:aws:kinesis:" + region + ":" + accountId + ":stream/" + streamName;
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeaseIsUpgradedInSingleStreamUpgradeMode() {
+        StreamConfig streamConfig = createDummyStreamConfig(1);
+        SingleStreamUpgradeTracker streamTracker = new SingleStreamUpgradeTracker(streamConfig.streamIdentifier(), streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        Lease lease3 = new MultiStreamLease();
+        lease3.leaseKey("111111111111:multiStreamTest-1:12345:shardId-003");
+        MultiStreamLease expectedMultiStreamLease1  = new MultiStreamLease(
+                lease1,
+                "111111111111:multiStreamTest-1:12345:shardId-001",
+                "111111111111:multiStreamTest-1:12345",
+                "shardId-001");
+        MultiStreamLease expectedMultiStreamLease2  = new MultiStreamLease(
+                lease1,
+                "111111111111:multiStreamTest-1:12345:shardId-002",
+                "111111111111:multiStreamTest-1:12345",
+                "shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2, lease3);
+        Collection<Lease> expectedNewLeases = Arrays.asList(expectedMultiStreamLease1, expectedMultiStreamLease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease1), eq(expectedMultiStreamLease1));
+        verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease2), eq(expectedMultiStreamLease2));
+        verify(leaseCoordinator).addLeasesToRenew(eq(expectedNewLeases));
+        // Verify that only single-stream leases are dropped
+        verify(leaseCoordinator).dropLeases(eq(Arrays.asList(lease1, lease2)));
+        verify(metricsScope).addDimension("Operation", "UpgradeLeases");
+        verify(metricsScope).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
+        verify(metricsScope).addData("NumUpgradedLeases", expectedNewLeases.size(), StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).end();
+    }
+
+    @Test
+    public void testLeaseUpgradeFailsForMoreThanOneConfiguredStream() {
+        StreamConfig streamConfig1 = createDummyStreamConfig(1);
+        StreamConfig streamConfig2 = createDummyStreamConfig(2);
+        SingleStreamUpgradeTracker streamTracker = mock(SingleStreamUpgradeTracker.class);
+        when(streamTracker.streamProcessingMode()).thenReturn(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE);
+        when(streamTracker.streamConfigList()).thenReturn(Arrays.asList(streamConfig1, streamConfig2));
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        scheduler = new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig);
+
+        assertThrows(IllegalArgumentException.class, () -> scheduler.checkAndUpgradeSingleStreamLeases());
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeaseUpgradeRecordsCorrectMetricWhenReplaceFails() {
+        StreamConfig streamConfig = createDummyStreamConfig(1);
+        SingleStreamUpgradeTracker streamTracker = new SingleStreamUpgradeTracker(streamConfig.streamIdentifier(), streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        MultiStreamLease expectedMultiStreamLease1  = new MultiStreamLease(
+                lease1,
+                "111111111111:multiStreamTest-1:12345:shardId-001",
+                "111111111111:multiStreamTest-1:12345",
+                "shardId-001");
+        MultiStreamLease expectedMultiStreamLease2  = new MultiStreamLease(
+                lease1,
+                "111111111111:multiStreamTest-1:12345:shardId-002",
+                "111111111111:multiStreamTest-1:12345",
+                "shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        Collection<Lease> expectedNewLeases = Arrays.asList(expectedMultiStreamLease1);
+        LeaseRefresher leaseRefresher = leaseCoordinator.leaseRefresher();
+        doThrow(InvalidStateException.class).when(leaseRefresher).replaceLease(eq(lease2), eq(expectedMultiStreamLease2));
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease1), eq(expectedMultiStreamLease1));
+        verify(leaseCoordinator.leaseRefresher()).replaceLease(eq(lease2), eq(expectedMultiStreamLease2));
+        verify(leaseCoordinator).addLeasesToRenew(eq(expectedNewLeases));
+        // Verify that only the leases without an error are dropped
+        verify(leaseCoordinator).dropLeases(eq(Arrays.asList(lease1)));
+        verify(metricsScope).addDimension("Operation", "UpgradeLeases");
+        verify(metricsScope).addData("Success", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
+        verify(metricsScope).addData("NumUpgradedLeases", expectedNewLeases.size(), StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).end();
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeaseUpgradeDoesNothingForOnlyMultistreamLeases() {
+        StreamConfig streamConfig = createDummyStreamConfig(1);
+        SingleStreamUpgradeTracker streamTracker = new SingleStreamUpgradeTracker(streamConfig.streamIdentifier(), streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new MultiStreamLease();
+        lease1.leaseKey("111111111111:multiStreamTest-1:12345:shardId-001");
+        Lease lease2 = new MultiStreamLease();
+        lease2.leaseKey("111111111111:multiStreamTest-1:12345:shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope).addDimension("Operation", "UpgradeLeases");
+        verify(metricsScope).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
+        verify(metricsScope).addData("NumUpgradedLeases", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).end();
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeasesAreNotUpgradedInSingleStreamMode() {
+        retrievalConfig = new RetrievalConfig(kinesisClient, "stream-1", applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new Lease();
+        lease1.leaseKey("shardId-001");
+        Lease lease2 = new Lease();
+        lease2.leaseKey("shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope, times(0)).addDimension("Operation", "UpgradeLeases");
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeasesAreNotUpgradedInSingleStreamCompatibleMode() {
+        StreamConfig streamConfig = createDummyStreamConfig(1);
+        SingleStreamCompatibleTracker streamTracker = new SingleStreamCompatibleTracker(streamConfig.streamIdentifier(), streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new MultiStreamLease();
+        lease1.leaseKey("shardId-001");
+        Lease lease2 = new MultiStreamLease();
+        lease2.leaseKey("111111111111:multiStreamTest-1:12345:shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope, times(0)).addDimension("Operation", "UpgradeLeases");
+    }
+
+    @SneakyThrows
+    @Test
+    public void testLeasesAreNotUpgradedInMultiStreamMode() {
+        List<StreamConfig> streamConfigList1 = IntStream.range(1, 5).mapToObj(streamId -> new StreamConfig(
+                StreamIdentifier.multiStreamInstance(
+                        Joiner.on(":").join(streamId * TEST_ACCOUNT, "multiStreamTest-" + streamId, streamId * 12345)),
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.LATEST)))
+                .collect(Collectors.toCollection(LinkedList::new));
+        List<StreamConfig> streamConfigList2 = IntStream.range(3, 5).mapToObj(streamId -> new StreamConfig(
+                StreamIdentifier.multiStreamInstance(
+                        Joiner.on(":").join(streamId * TEST_ACCOUNT, "multiStreamTest-" + streamId, streamId * 12345)),
+                InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.LATEST)))
+                .collect(Collectors.toCollection(LinkedList::new));
+        retrievalConfig = new RetrievalConfig(kinesisClient, multiStreamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        when(multiStreamTracker.streamConfigList()).thenReturn(streamConfigList1, streamConfigList2);
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        Lease lease1 = new MultiStreamLease();
+        lease1.leaseKey("111111111111:multiStreamTest-1:12345:shardId-001");
+        Lease lease2 = new MultiStreamLease();
+        lease2.leaseKey("111111111111:multiStreamTest-2:12345:shardId-002");
+        Collection<Lease> originalLeases = Arrays.asList(lease1, lease2);
+        when(leaseCoordinator.getAssignments()).thenReturn(originalLeases);
+
+        scheduler.runProcessLoop();
+
+        verify(scheduler).checkAndUpgradeSingleStreamLeases();
+        verify(scheduler).emitWorkerMetrics();
+        verify(leaseCoordinator.leaseRefresher(), times(0)).replaceLease(any(), any());
+        verify(leaseCoordinator, times(0)).addLeasesToRenew(any());
+        verify(leaseCoordinator, times(0)).dropLeases(any());
+        verify(metricsScope, times(0)).addDimension("Operation", "UpgradeLeases");
+    }
+
+    @Test
+    public void testConvertToMultiStreamLease() {
+        StreamConfig streamConfig = createDummyStreamConfig(1);
+        SingleStreamUpgradeTracker streamTracker = new SingleStreamUpgradeTracker(streamConfig.streamIdentifier(), streamConfig);
+        retrievalConfig = new RetrievalConfig(kinesisClient, streamTracker, applicationName)
+                .retrievalFactory(retrievalFactory);
+        scheduler = new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig);
+        Lease lease = new Lease(TEST_SHARD_ID, "worker-01", 0L, UUID.randomUUID(), System.nanoTime(), null, null, null,
+                new HashSet<>(), new HashSet<>(), null, HashKeyRangeForLease.deserialize("1", "2"));
+        String expectedLeaseKey = MultiStreamLease.getLeaseKey(streamConfig.streamIdentifier().serialize(), TEST_SHARD_ID);
+
+        MultiStreamLease multiStreamLease = scheduler.convertToMultiStreamLease(lease);
+
+        assertEquals(expectedLeaseKey, multiStreamLease.leaseKey());
+        assertEquals(TEST_SHARD_ID, multiStreamLease.shardId());
+        assertEquals(streamConfig.streamIdentifier().serialize(), multiStreamLease.streamIdentifier());
+        assertEquals(lease.leaseOwner(), multiStreamLease.leaseOwner());
+        assertEquals(lease.leaseCounter(), multiStreamLease.leaseCounter());
+        assertEquals(lease.concurrencyToken(), multiStreamLease.concurrencyToken());
+        assertEquals(lease.lastCounterIncrementNanos(), multiStreamLease.lastCounterIncrementNanos());
+        assertEquals(lease.checkpoint(), multiStreamLease.checkpoint());
+        assertEquals(lease.pendingCheckpoint(), multiStreamLease.pendingCheckpoint());
+        assertEquals(lease.ownerSwitchesSinceCheckpoint(), multiStreamLease.ownerSwitchesSinceCheckpoint());
+        assertEquals(lease.parentShardIds(), multiStreamLease.parentShardIds());
+        assertEquals(lease.childShardIds(), multiStreamLease.childShardIds());
+        assertEquals(lease.pendingCheckpointState(), multiStreamLease.pendingCheckpointState());
+        assertEquals(lease.hashKeyRangeForLease(), multiStreamLease.hashKeyRangeForLease());
+    }
+
+    @Test
+    public void testEmitWorkerMetrics() {
+        metricsConfig = mock(MetricsConfig.class);
+        when(metricsConfig.metricsFactory()).thenReturn(metricsFactory);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
+        scheduler = spy(new Scheduler(checkpointConfig, coordinatorConfig, leaseManagementConfig, lifecycleConfig,
+                metricsConfig, processorConfig, retrievalConfig));
+        when(scheduler.shouldEmitWorkerMetrics()).thenReturn(true);
+
+        scheduler.emitWorkerMetrics();
+
+        verify(metricsScope).addDimension("Operation", "WorkerInfo");
+        verify(metricsScope).addData("SingleStreamMode", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addDimension("WorkerIdentifier", "workerIdentifier");
+        verify(metricsScope).end();
+        verifyNoMoreInteractions(metricsScope);
     }
 
     /*private void runAndTestWorker(int numShards, int threadPoolSize) throws Exception {

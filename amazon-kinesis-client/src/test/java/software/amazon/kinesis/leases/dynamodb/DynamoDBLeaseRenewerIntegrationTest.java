@@ -18,6 +18,7 @@ import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertThrows;
 
 import java.util.Collections;
 import java.util.Map;
@@ -28,11 +29,17 @@ import org.junit.Test;
 
 import org.junit.runner.RunWith;
 import org.mockito.runners.MockitoJUnitRunner;
+
+import lombok.SneakyThrows;
+import software.amazon.awssdk.core.util.DefaultSdkAutoConstructList;
+import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseIntegrationTest;
+import software.amazon.kinesis.leases.LeaseManagementConfig;
 import software.amazon.kinesis.leases.LeaseRenewer;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
 import software.amazon.kinesis.metrics.NullMetricsFactory;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 @RunWith(MockitoJUnitRunner.class)
 public class DynamoDBLeaseRenewerIntegrationTest extends LeaseIntegrationTest {
@@ -269,6 +276,89 @@ public class DynamoDBLeaseRenewerIntegrationTest extends LeaseIntegrationTest {
         final String owner = "foo:8000";
         TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
         builder.withLease(shardId, owner);
+        Map<String, Lease> leases = builder.build();
+        DynamoDBLeaseRenewer renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
+                Executors.newCachedThreadPool(), new NullMetricsFactory());
+        renewer.initialize();
+        Map<String, Lease> heldLeases = renewer.getCurrentlyHeldLeases();
+        assertThat(heldLeases.size(), equalTo(leases.size()));
+        assertThat(heldLeases.keySet(), equalTo(leases.keySet()));
+    }
+
+    @SneakyThrows
+    @Test
+    public void testInitializeFailsForMultiStreamLeaseInSingleStreamMode() {
+        final String shardId = "shd-0-0";
+        final String owner = "foo:8000";
+        final String stream = "stream-1";
+
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.SINGLE_STREAM_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        builder.withMultiStreamLease(shardId, owner, stream).build();
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
+                Executors.newCachedThreadPool(), new NullMetricsFactory());
+
+        assertThrows(IllegalArgumentException.class, () -> renewer.initialize());
+    }
+
+    @SneakyThrows
+    @Test
+    public void testInitializeFailsForSingleStreamLeaseInMultiStreamMode() {
+        final String shardId = "shd-0-0";
+        final String owner = "foo:8000";
+
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.MULTI_STREAM_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        builder.withLease(shardId, owner).build();
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
+                Executors.newCachedThreadPool(), new NullMetricsFactory());
+
+        assertThrows(IllegalArgumentException.class, () -> renewer.initialize());
+    }
+
+    @Test
+    public void testInitializeSingleStreamCompatibleMode() throws LeasingException {
+        final String shardId1 = "shd-0-1";
+        final String shardId2 = "shd-0-2";
+        final String owner = "foo:8000";
+        final String stream = "stream-1";
+
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        builder.withLease(shardId1, owner);
+        builder.withMultiStreamLease(shardId2, owner, stream);
+        Map<String, Lease> leases = builder.build();
+        DynamoDBLeaseRenewer renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
+                Executors.newCachedThreadPool(), new NullMetricsFactory());
+        renewer.initialize();
+        Map<String, Lease> heldLeases = renewer.getCurrentlyHeldLeases();
+        assertThat(heldLeases.size(), equalTo(leases.size()));
+        assertThat(heldLeases.keySet(), equalTo(leases.keySet()));
+    }
+
+    @Test
+    public void testInitializeSingleStreamUpgradeMode() throws LeasingException {
+        final String shardId1 = "shd-0-1";
+        final String shardId2 = "shd-0-2";
+        final String owner = "foo:8000";
+        final String stream = "stream-1";
+
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        builder.withLease(shardId1, owner);
+        builder.withMultiStreamLease(shardId2, owner, stream);
         Map<String, Lease> leases = builder.build();
         DynamoDBLeaseRenewer renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
                 Executors.newCachedThreadPool(), new NullMetricsFactory());

@@ -320,6 +320,28 @@ public class DynamoDBLeaseCoordinator implements LeaseCoordinator {
     }
 
     @Override
+    public void addLeasesToRenew(Collection<Lease> leases) {
+        // Only add leases to renewer if coordinator is still running.
+        synchronized (shutdownLock) {
+            if (running) {
+                leaseRenewer.addLeasesToRenew(leases);
+            }
+        }
+    }
+
+    @Override
+    public void dropLeases(Collection<Lease> leases) {
+        // Only add leases to renewer if coordinator is still running.
+        synchronized (shutdownLock) {
+            if (running) {
+                for (Lease lease : leases) {
+                    leaseRenewer.dropLease(lease);
+                }
+            }
+        }
+    }
+
+    @Override
     public Collection<Lease> getAssignments() {
         return leaseRenewer.getCurrentlyHeldLeases().values();
     }

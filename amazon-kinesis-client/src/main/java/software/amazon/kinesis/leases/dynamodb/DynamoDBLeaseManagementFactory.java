@@ -43,6 +43,7 @@ import software.amazon.kinesis.leases.LeaseSerializer;
 import software.amazon.kinesis.leases.ShardDetector;
 import software.amazon.kinesis.leases.ShardSyncTaskManager;
 import software.amazon.kinesis.metrics.MetricsFactory;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
 /**
  *
@@ -94,6 +95,7 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
     private final Collection<Tag> tags;
     private final boolean isMultiStreamMode;
     private final LeaseCleanupConfig leaseCleanupConfig;
+    private final StreamProcessingMode streamProcessingMode;
 
     /**
      * Constructor.
@@ -622,6 +624,68 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
             Collection<Tag> tags, LeaseSerializer leaseSerializer,
             Function<StreamConfig, ShardDetector> customShardDetectorProvider, boolean isMultiStreamMode,
             LeaseCleanupConfig leaseCleanupConfig) {
+                this(kinesisClient, dynamoDBClient, tableName,
+                workerIdentifier, executorService, failoverTimeMillis,
+                enablePriorityLeaseAssignment, epsilonMillis, maxLeasesForWorker,
+                maxLeasesToStealAtOneTime, maxLeaseRenewalThreads, cleanupLeasesUponShardCompletion,
+                ignoreUnexpectedChildShards, shardSyncIntervalMillis, consistentReads, listShardsBackoffTimeMillis,
+                maxListShardsRetryAttempts, maxCacheMissesBeforeReload, listShardsCacheAllowedAgeInSeconds,
+                cacheMissWarningModulus, initialLeaseTableReadCapacity, initialLeaseTableWriteCapacity,
+                deprecatedHierarchicalShardSyncer, tableCreatorCallback, dynamoDbRequestTimeout, billingMode,
+                leaseTableDeletionProtectionEnabled, tags, leaseSerializer, customShardDetectorProvider, isMultiStreamMode,
+                leaseCleanupConfig, isMultiStreamMode ? StreamProcessingMode.MULTI_STREAM_MODE : StreamProcessingMode.SINGLE_STREAM_MODE);
+    }
+
+    /**
+     * Constructor.
+     * @param kinesisClient
+     * @param dynamoDBClient
+     * @param tableName
+     * @param workerIdentifier
+     * @param executorService
+     * @param failoverTimeMillis
+     * @param enablePriorityLeaseAssignment
+     * @param epsilonMillis
+     * @param maxLeasesForWorker
+     * @param maxLeasesToStealAtOneTime
+     * @param maxLeaseRenewalThreads
+     * @param cleanupLeasesUponShardCompletion
+     * @param ignoreUnexpectedChildShards
+     * @param shardSyncIntervalMillis
+     * @param consistentReads
+     * @param listShardsBackoffTimeMillis
+     * @param maxListShardsRetryAttempts
+     * @param maxCacheMissesBeforeReload
+     * @param listShardsCacheAllowedAgeInSeconds
+     * @param cacheMissWarningModulus
+     * @param initialLeaseTableReadCapacity
+     * @param initialLeaseTableWriteCapacity
+     * @param deprecatedHierarchicalShardSyncer
+     * @param tableCreatorCallback
+     * @param dynamoDbRequestTimeout
+     * @param billingMode
+     * @param leaseTableDeletionProtectionEnabled
+     * @param leaseSerializer
+     * @param customShardDetectorProvider
+     * @param isMultiStreamMode
+     * @param leaseCleanupConfig
+     * @param streamProcessingMode
+     */
+    public DynamoDBLeaseManagementFactory(final KinesisAsyncClient kinesisClient,
+            final DynamoDbAsyncClient dynamoDBClient, final String tableName, final String workerIdentifier,
+            final ExecutorService executorService, final long failoverTimeMillis,
+            final boolean enablePriorityLeaseAssignment, final long epsilonMillis,
+            final int maxLeasesForWorker, final int maxLeasesToStealAtOneTime, final int maxLeaseRenewalThreads,
+            final boolean cleanupLeasesUponShardCompletion, final boolean ignoreUnexpectedChildShards,
+            final long shardSyncIntervalMillis, final boolean consistentReads, final long listShardsBackoffTimeMillis,
+            final int maxListShardsRetryAttempts, final int maxCacheMissesBeforeReload,
+            final long listShardsCacheAllowedAgeInSeconds, final int cacheMissWarningModulus,
+            final long initialLeaseTableReadCapacity, final long initialLeaseTableWriteCapacity,
+            final HierarchicalShardSyncer deprecatedHierarchicalShardSyncer, final TableCreatorCallback tableCreatorCallback,
+            Duration dynamoDbRequestTimeout, BillingMode billingMode, final boolean leaseTableDeletionProtectionEnabled,
+            Collection<Tag> tags, LeaseSerializer leaseSerializer,
+            Function<StreamConfig, ShardDetector> customShardDetectorProvider, boolean isMultiStreamMode,
+            LeaseCleanupConfig leaseCleanupConfig, StreamProcessingMode streamProcessingMode) {
         this.kinesisClient = kinesisClient;
         this.dynamoDBClient = dynamoDBClient;
         this.tableName = tableName;
@@ -654,6 +718,7 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
         this.isMultiStreamMode = isMultiStreamMode;
         this.leaseCleanupConfig = leaseCleanupConfig;
         this.tags = tags;
+        this.streamProcessingMode = streamProcessingMode;
     }
 
     @Override
@@ -711,7 +776,7 @@ public class DynamoDBLeaseManagementFactory implements LeaseManagementFactory {
                 ignoreUnexpectedChildShards,
                 shardSyncIntervalMillis,
                 executorService,
-                new HierarchicalShardSyncer(isMultiStreamMode, streamConfig.streamIdentifier().toString(),
+                new HierarchicalShardSyncer(streamProcessingMode, streamConfig.streamIdentifier().toString(),
                         deletedStreamListProvider),
                 metricsFactory);
     }

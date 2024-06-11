@@ -152,4 +152,22 @@ public interface LeaseCoordinator {
      * @return LeaseCoordinator
      */
     DynamoDBLeaseCoordinator initialLeaseTableReadCapacity(long readCapacity);
+
+    /**
+     * Requests that renewals for the given leases are stopped
+     * @param leases leases to stop renewing
+     */
+    default void dropLeases(Collection<Lease> leases) {
+        for (Lease lease: leases) {
+            dropLease(lease);
+        }
+    }
+
+    /**
+     * Adds leases to the set of currently held leases
+     * @param leases new leases
+     */
+    default void addLeasesToRenew(Collection<Lease> leases) {
+        throw new UnsupportedOperationException();
+    }
 }

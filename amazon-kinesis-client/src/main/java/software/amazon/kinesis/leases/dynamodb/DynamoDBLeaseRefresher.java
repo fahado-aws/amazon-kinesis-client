@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableMap;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +34,7 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValueUpdate;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
+import software.amazon.awssdk.services.dynamodb.model.Delete;
 import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.DescribeTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DescribeTableResponse;
@@ -42,6 +44,7 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.LimitExceededException;
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughput;
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException;
+import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ResourceInUseException;
 import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException;
@@ -49,11 +52,15 @@ import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScanResponse;
 import software.amazon.awssdk.services.dynamodb.model.TableStatus;
 import software.amazon.awssdk.services.dynamodb.model.Tag;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.utils.CollectionUtils;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
 import software.amazon.kinesis.common.FutureUtils;
 import software.amazon.kinesis.common.StreamIdentifier;
+import software.amazon.kinesis.leases.DynamoUtils;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
 import software.amazon.kinesis.leases.LeaseRefresher;
@@ -705,6 +712,60 @@ public class DynamoDBLeaseRefresher implements LeaseRefresher {
         }
 
         log.info("Deleted lease with leaseKey {}", lease.leaseKey());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void replaceLease(@NonNull final Lease oldLease, @NonNull final Lease newLease)
+            throws DependencyException, InvalidStateException, ProvisionedThroughputException {
+        log.debug("Replacing lease: {} with lease: {}", oldLease, newLease);
+
+        Put createNewLease = Put.builder()
+                .tableName(table)
+                .item(serializer.toDynamoRecord(newLease))
+                .conditionExpression("attribute_not_exists(#leaseKey)")
+                .expressionAttributeNames(ImmutableMap.of("#leaseKey", "leaseKey"))
+                .build();
+
+        Delete deleteOldLease = Delete.builder()
+                .tableName(table)
+                .key(serializer.getDynamoHashKey(oldLease))
+                .conditionExpression("#leaseCounter = :leaseCounter")
+                .expressionAttributeNames(ImmutableMap.of("#leaseCounter", "leaseCounter"))
+                .expressionAttributeValues(ImmutableMap.of(":leaseCounter",
+                    DynamoUtils.createAttributeValue(oldLease.leaseCounter())))
+                .build();
+
+        Collection<TransactWriteItem> actions = Arrays.asList(
+            TransactWriteItem.builder().put(createNewLease).build(),
+            TransactWriteItem.builder().delete(deleteOldLease).build());
+
+        TransactWriteItemsRequest request = TransactWriteItemsRequest.builder()
+            .transactItems(actions)
+            .build();
+
+        final AWSExceptionManager exceptionManager = createExceptionManager();
+        exceptionManager.add(ConditionalCheckFailedException.class, t -> t);
+
+        try {
+            try {
+                FutureUtils.resolveOrCancelFuture(dynamoDBClient.transactWriteItems(request), dynamoDbRequestTimeout);
+            } catch (ExecutionException e) {
+                throw exceptionManager.apply(e.getCause());
+            } catch (InterruptedException e) {
+                throw new DependencyException(e);
+            }
+        } catch (TransactionCanceledException e) {
+            throw new InvalidStateException(
+                String.format("Failed to delete lease: %s and create lease: %s because of reasons: %s",
+                    oldLease, newLease, e.cancellationReasons()),
+                e);
+        } catch (DynamoDbException | TimeoutException e) {
+            throw convertAndRethrowExceptions("replace", newLease.leaseKey(), e);
+        }
+        log.info("Deleted lease: {} and created lease: {}", oldLease, newLease);
     }
 
     /**

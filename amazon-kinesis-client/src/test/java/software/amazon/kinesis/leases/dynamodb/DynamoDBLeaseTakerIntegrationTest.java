@@ -21,13 +21,21 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.runners.MockitoJUnitRunner;
+
+import software.amazon.awssdk.core.util.DefaultSdkAutoConstructList;
+import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseIntegrationTest;
+import software.amazon.kinesis.leases.LeaseManagementConfig;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
 import software.amazon.kinesis.metrics.NullMetricsFactory;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
+
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertThrows;
 
 @RunWith(MockitoJUnitRunner.class)
 public class DynamoDBLeaseTakerIntegrationTest extends LeaseIntegrationTest {
@@ -242,5 +250,65 @@ public class DynamoDBLeaseTakerIntegrationTest extends LeaseIntegrationTest {
 
         // Assert that the unowned lease was taken and we did not steal anything from bar
         builder.takeMutateAssert(taker, "1");
+    }
+
+    @Test
+    public void testTakesLeasesInSingleStreamCompatibleMode() throws LeasingException {
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        taker = new DynamoDBLeaseTaker(leaseRefresher, "foo", LEASE_DURATION_MILLIS, new NullMetricsFactory());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+
+        builder.withLease("1", null).build();
+        builder.withMultiStreamLease("2", null, "stream-1").build();
+
+        builder.takeMutateAssert(taker, "1", MultiStreamLease.getLeaseKey("stream-1", "2"));
+    }
+
+    @Test
+    public void testTakesLeasesInSingleStreamUpgradeMode() throws LeasingException {
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        taker = new DynamoDBLeaseTaker(leaseRefresher, "foo", LEASE_DURATION_MILLIS, new NullMetricsFactory());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+
+        builder.withLease("1", null).build();
+        builder.withMultiStreamLease("2", null, "stream-1").build();
+
+        builder.takeMutateAssert(taker, "1", MultiStreamLease.getLeaseKey("stream-1", "2"));
+    }
+
+    @Test
+    public void testLeaseTakingFailsForMultiStreamLeasesInSingleStreamMode() throws LeasingException {
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.SINGLE_STREAM_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        taker = new DynamoDBLeaseTaker(leaseRefresher, "foo", LEASE_DURATION_MILLIS, new NullMetricsFactory());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+
+        builder.withLease("1", null).build();
+        builder.withMultiStreamLease("2", null, "stream-1").build();
+
+        assertThrows(IllegalArgumentException.class, () -> taker.takeLeases());
+    }
+
+    @Test
+    public void testLeaseTakingFailsForSingleStreamLeasesInMultiStreamMode() throws LeasingException {
+        leaseSerializer = new DynamoDBLeaseSerializer(StreamProcessingMode.MULTI_STREAM_MODE);
+        leaseRefresher = new DynamoDBLeaseRefresher(tableName, ddbClient, leaseSerializer, true,
+                tableCreatorCallback, LeaseManagementConfig.DEFAULT_REQUEST_TIMEOUT, BillingMode.PAY_PER_REQUEST, false,
+                DefaultSdkAutoConstructList.getInstance());
+        taker = new DynamoDBLeaseTaker(leaseRefresher, "foo", LEASE_DURATION_MILLIS, new NullMetricsFactory());
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+
+        builder.withLease("1", null).build();
+        builder.withMultiStreamLease("2", null, "stream-1").build();
+
+        assertThrows(IllegalArgumentException.class, () -> taker.takeLeases());
     }
 }
