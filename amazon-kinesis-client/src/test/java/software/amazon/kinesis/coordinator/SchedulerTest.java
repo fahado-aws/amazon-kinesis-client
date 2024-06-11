@@ -123,7 +123,6 @@ import software.amazon.kinesis.processor.MultiStreamTracker;
 import software.amazon.kinesis.processor.ProcessorConfig;
 import software.amazon.kinesis.processor.ShardRecordProcessorFactory;
 import software.amazon.kinesis.processor.SingleStreamCompatibleTracker;
-import software.amazon.kinesis.processor.SingleStreamTracker;
 import software.amazon.kinesis.processor.SingleStreamUpgradeTracker;
 import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.processor.ShardRecordProcessor;

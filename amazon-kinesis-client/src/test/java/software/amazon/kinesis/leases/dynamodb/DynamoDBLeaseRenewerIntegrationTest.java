@@ -287,7 +287,7 @@ public class DynamoDBLeaseRenewerIntegrationTest extends LeaseIntegrationTest {
 
     @SneakyThrows
     @Test
-    public void testInitializeFailsForMultiStreamLeaseInSingleStreamModeFails() {
+    public void testInitializeFailsForMultiStreamLeaseInSingleStreamMode() {
         final String shardId = "shd-0-0";
         final String owner = "foo:8000";
         final String stream = "stream-1";
@@ -301,12 +301,12 @@ public class DynamoDBLeaseRenewerIntegrationTest extends LeaseIntegrationTest {
         renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
                 Executors.newCachedThreadPool(), new NullMetricsFactory());
 
-        assertThrows(IllegalArgumentException.class,() -> renewer.initialize());
+        assertThrows(IllegalArgumentException.class, () -> renewer.initialize());
     }
 
     @SneakyThrows
     @Test
-    public void testInitializeFailsForSingleStreamLeaseInMultiStreamModeFails() {
+    public void testInitializeFailsForSingleStreamLeaseInMultiStreamMode() {
         final String shardId = "shd-0-0";
         final String owner = "foo:8000";
 
@@ -319,7 +319,7 @@ public class DynamoDBLeaseRenewerIntegrationTest extends LeaseIntegrationTest {
         renewer = new DynamoDBLeaseRenewer(leaseRefresher, owner, 30000L,
                 Executors.newCachedThreadPool(), new NullMetricsFactory());
 
-        assertThrows(IllegalArgumentException.class,() -> renewer.initialize());
+        assertThrows(IllegalArgumentException.class, () -> renewer.initialize());
     }
 
     @Test
