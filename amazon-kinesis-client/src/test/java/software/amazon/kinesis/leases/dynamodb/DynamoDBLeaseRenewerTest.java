@@ -268,4 +268,36 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(lease.pendingCheckpointState(), multiStreamLease.pendingCheckpointState());
         assertEquals(lease.hashKeyRangeForLease(), multiStreamLease.hashKeyRangeForLease());
     }
+    @Test
+    public void testSingleStreamUpgradeWorkerHoldsMultiStreamLeaseWhenInitialized()
+        throws Exception {
+        // given
+        String streamIdentifierSer = "123456789012:TestStream:12345";
+        StreamIdentifier streamIdentifier = StreamIdentifier.multiStreamInstance(streamIdentifierSer);
+        StreamConfig streamConfig = new StreamConfig(streamIdentifier,
+            InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
+        Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
+        streamConfigMap.put(streamIdentifier, streamConfig);
+        renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
+            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            streamConfigMap);
+
+        Lease lease1 = newLease("1");
+        Lease lease2 = newMultiStreamLease("2");
+        List<Lease> leases = Arrays.asList(lease1, lease2);
+        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        doReturn(true).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
+        doReturn(leases).when(leaseRefresher).listLeases();
+
+        // when
+        renewer.initialize();
+
+        // then
+        Map<String, Lease> currentLeases = renewer.getCurrentlyHeldLeases();
+        assertEquals(2, currentLeases.size());
+        verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
+        assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
+    }
 }
