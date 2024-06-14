@@ -21,9 +21,12 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyDouble;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,6 +44,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
+import software.amazon.awssdk.services.cloudwatch.model.StandardUnit;
 import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.common.InitialPositionInStream;
 import software.amazon.kinesis.common.InitialPositionInStreamExtended;
@@ -52,6 +56,9 @@ import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.ProvisionedThroughputException;
+import software.amazon.kinesis.metrics.MetricsFactory;
+import software.amazon.kinesis.metrics.MetricsLevel;
+import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.NullMetricsFactory;
 import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 
@@ -64,6 +71,10 @@ public class DynamoDBLeaseRenewerTest {
 
     @Mock
     private LeaseRefresher leaseRefresher;
+    @Mock
+    private MetricsFactory metricsFactory;
+    @Mock
+    private MetricsScope metricsScope;
 
     private static Lease newLease(String leaseKey) {
         return new Lease(leaseKey, WORKER_IDENTIFIER, 0L, UUID.randomUUID(), System.nanoTime(), null, null, null,
@@ -146,8 +157,9 @@ public class DynamoDBLeaseRenewerTest {
             InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
         Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
         streamConfigMap.put(streamIdentifier, streamConfig);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
         renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
-            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            Executors.newCachedThreadPool(), metricsFactory, StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
             streamConfigMap);
         /*
          * Prepare leases to be renewed
@@ -157,7 +169,6 @@ public class DynamoDBLeaseRenewerTest {
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
         Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
-        doReturn(true).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         doReturn(true).when(leaseRefresher).renewLease(expectedMultiStreamLease);
         doReturn(true).when(leaseRefresher).renewLease(lease2);
 
@@ -172,6 +183,9 @@ public class DynamoDBLeaseRenewerTest {
         verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
         assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
+        verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
 
     @Test
@@ -184,8 +198,9 @@ public class DynamoDBLeaseRenewerTest {
             InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
         Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
         streamConfigMap.put(streamIdentifier, streamConfig);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
         renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
-            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            Executors.newCachedThreadPool(), metricsFactory, StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
             streamConfigMap);
         /*
          * Prepare leases to be renewed
@@ -195,7 +210,6 @@ public class DynamoDBLeaseRenewerTest {
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
         Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
-        doReturn(true).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
         doReturn(leases).when(leaseRefresher).listLeases();
 
@@ -208,6 +222,9 @@ public class DynamoDBLeaseRenewerTest {
         verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
         assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
+        verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
 
     @Test
@@ -269,7 +286,7 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(lease.hashKeyRangeForLease(), multiStreamLease.hashKeyRangeForLease());
     }
     @Test
-    public void testSingleStreamUpgradeWorkerHoldsMultiStreamLeaseWhenInitialized()
+    public void testInitializeFailsWhenLeaseReplacementFails()
         throws Exception {
         // given
         String streamIdentifierSer = "123456789012:TestStream:12345";
@@ -278,26 +295,28 @@ public class DynamoDBLeaseRenewerTest {
             InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON));
         Map<StreamIdentifier, StreamConfig> streamConfigMap = new HashMap<>();
         streamConfigMap.put(streamIdentifier, streamConfig);
+        when(metricsFactory.createMetrics()).thenReturn(metricsScope);
         renewer = new DynamoDBLeaseRenewer(leaseRefresher, WORKER_IDENTIFIER, LEASE_DURATION_MILLIS,
-            Executors.newCachedThreadPool(), new NullMetricsFactory(), StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
+            Executors.newCachedThreadPool(), metricsFactory, StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE,
             streamConfigMap);
 
         Lease lease1 = newLease("1");
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
         Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
-        doReturn(true).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
+        doThrow(InvalidStateException.class).when(leaseRefresher).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
         doReturn(leases).when(leaseRefresher).listLeases();
 
         // when
-        renewer.initialize();
+        assertThrows(InvalidStateException.class, () -> renewer.initialize());
 
         // then
         Map<String, Lease> currentLeases = renewer.getCurrentlyHeldLeases();
-        assertEquals(2, currentLeases.size());
+        assertEquals(0, currentLeases.size());
         verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
-        assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
-        assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
+        verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        verify(metricsScope, times(1)).addData("Success", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
 }
