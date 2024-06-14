@@ -60,6 +60,7 @@ import software.amazon.awssdk.utils.CollectionUtils;
 import software.amazon.kinesis.annotations.KinesisClientInternalApi;
 import software.amazon.kinesis.common.FutureUtils;
 import software.amazon.kinesis.common.StreamIdentifier;
+import software.amazon.kinesis.leases.DynamoUtils;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
 import software.amazon.kinesis.leases.LeaseRefresher;
@@ -717,7 +718,7 @@ public class DynamoDBLeaseRefresher implements LeaseRefresher {
      * {@inheritDoc}
      */
     @Override
-    public boolean replaceLease(@NonNull final Lease oldLease, @NonNull final Lease newLease)
+    public void replaceLease(@NonNull final Lease oldLease, @NonNull final Lease newLease)
             throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         log.debug("Replacing lease: {} with lease: {}", oldLease, newLease);
 
@@ -731,6 +732,10 @@ public class DynamoDBLeaseRefresher implements LeaseRefresher {
         Delete deleteOldLease = Delete.builder()
                 .tableName(table)
                 .key(serializer.getDynamoHashKey(oldLease))
+                .conditionExpression("#leaseCounter = :leaseCounter")
+                .expressionAttributeNames(ImmutableMap.of("#leaseCounter", "leaseCounter"))
+                .expressionAttributeValues(ImmutableMap.of(":leaseCounter",
+                    DynamoUtils.createAttributeValue(oldLease.leaseCounter())))
                 .build();
 
         Collection<TransactWriteItem> actions = Arrays.asList(
@@ -753,14 +758,14 @@ public class DynamoDBLeaseRefresher implements LeaseRefresher {
                 throw new DependencyException(e);
             }
         } catch (TransactionCanceledException e) {
-            log.warn("Failed to delete lease: {} and create lease: {} because of reasons: {}",
-                oldLease, newLease, e.cancellationReasons());
-            return false;
+            throw new InvalidStateException(
+                String.format("Failed to delete lease: %s and create lease: %s because of reasons: %s",
+                    oldLease, newLease, e.cancellationReasons()),
+                e);
         } catch (DynamoDbException | TimeoutException e) {
-            throw convertAndRethrowExceptions("create", newLease.leaseKey(), e);
+            throw convertAndRethrowExceptions("replace", newLease.leaseKey(), e);
         }
         log.info("Deleted lease: {} and created lease: {}", oldLease, newLease);
-        return true;
     }
 
     /**

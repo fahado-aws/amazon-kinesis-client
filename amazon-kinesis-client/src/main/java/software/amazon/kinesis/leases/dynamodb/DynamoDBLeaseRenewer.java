@@ -62,6 +62,7 @@ import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 public class DynamoDBLeaseRenewer implements LeaseRenewer {
     private static final int RENEWAL_RETRIES = 2;
     private static final String RENEW_ALL_LEASES_DIMENSION = "RenewAllLeases";
+    private static final String UPGRADE_LEASE_OPERATION = "UpgradeLease";
 
     private final LeaseRefresher leaseRefresher;
     private final String workerIdentifier;
@@ -412,16 +413,20 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
 
             if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE
                 && !(lease instanceof MultiStreamLease)) {
+                final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, UPGRADE_LEASE_OPERATION);
+                final long startTime = System.currentTimeMillis();
                 MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
-                if (leaseRefresher.replaceLease(lease, multiStreamLease)) {
-                    multiStreamLease.concurrencyToken(UUID.randomUUID());
-                    ownedLeases.put(multiStreamLease.leaseKey(), multiStreamLease);
-                    ownedLeases.remove(lease.leaseKey());
-                } else {
-                    log.warn("Worker {} ignoring single-stream lease: {} because it could not be " +
-                        "replaced with multi-stream lease: {}", workerIdentifier, lease, multiStreamLease);
+                boolean success = false;
+                try {
+                    leaseRefresher.replaceLease(lease, multiStreamLease);
+                    success = true;
+                } finally {
+                    MetricsUtil.addSuccessAndLatency(metricsScope, success, startTime, MetricsLevel.DETAILED);
+                    MetricsUtil.endScope(metricsScope);
                 }
-
+                multiStreamLease.concurrencyToken(UUID.randomUUID());
+                ownedLeases.put(multiStreamLease.leaseKey(), multiStreamLease);
+                ownedLeases.remove(lease.leaseKey());
             } else {
                 Lease authoritativeLease = lease.copy();
 

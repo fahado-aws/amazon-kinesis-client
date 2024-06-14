@@ -368,9 +368,7 @@ public class DynamoDBLeaseRefresherIntegrationTest extends LeaseIntegrationTest 
         oldLease.ownerSwitchesSinceCheckpoint(), oldLease.parentShardIds(), oldLease.childShardIds(),
         oldLease.pendingCheckpointState(), oldLease.hashKeyRangeForLease());
 
-        boolean result = leaseRefresher.replaceLease(oldLease, newLease);
-
-        assertFalse(result);
+        assertThrows(InvalidStateException.class, () -> leaseRefresher.replaceLease(oldLease, newLease));
         Lease persistedOldLease = leaseRefresher.getLease(oldLease.leaseKey());
         assertEquals(oldLease, persistedOldLease);
         Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
