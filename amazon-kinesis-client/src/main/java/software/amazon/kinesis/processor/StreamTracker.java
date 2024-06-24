@@ -134,7 +134,7 @@ public interface StreamTracker {
         MULTI_STREAM_MODE {
             @Override
             public String metricName() {
-                return "MultiStreamStreamMode";
+                return "MultiStreamMode";
             }
         };
         public abstract String metricName();

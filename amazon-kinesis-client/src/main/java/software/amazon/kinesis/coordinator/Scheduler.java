@@ -1105,7 +1105,18 @@ public class Scheduler implements Runnable {
     void emitWorkerMetrics() {
         if (shouldEmitWorkerMetrics()) {
             final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, WORKER_INFO);
-            MetricsUtil.addCount(metricsScope, streamProcessingMode.metricName(), 1, MetricsLevel.DETAILED);
+            MetricsUtil.addCount(metricsScope, StreamProcessingMode.SINGLE_STREAM_MODE.metricName(),
+                (StreamProcessingMode.SINGLE_STREAM_MODE == streamProcessingMode) ? 1 : 0,
+                MetricsLevel.DETAILED);
+            MetricsUtil.addCount(metricsScope, StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE.metricName(),
+                (StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE == streamProcessingMode) ? 1 : 0,
+                MetricsLevel.DETAILED);
+            MetricsUtil.addCount(metricsScope, StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE.metricName(),
+                (StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == streamProcessingMode) ? 1 : 0,
+                MetricsLevel.DETAILED);
+            MetricsUtil.addCount(metricsScope, StreamProcessingMode.MULTI_STREAM_MODE.metricName(),
+                (StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode) ? 1 : 0,
+                MetricsLevel.DETAILED);
             MetricsUtil.addWorkerIdentifier(metricsScope, leaseManagementConfig.workerIdentifier());
             MetricsUtil.endScope(metricsScope);
             emitWorkerMetricsWatch.reset().start();

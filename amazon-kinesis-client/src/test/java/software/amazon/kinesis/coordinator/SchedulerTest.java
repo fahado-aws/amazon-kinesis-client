@@ -1237,6 +1237,9 @@ public class SchedulerTest {
 
         verify(metricsScope).addDimension("Operation", "WorkerInfo");
         verify(metricsScope).addData("SingleStreamMode", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("SingleStreamCompatibleMode", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("SingleStreamUpgradeMode", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData("MultiStreamMode", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addDimension("WorkerIdentifier", "workerIdentifier");
         verify(metricsScope).end();
         verifyNoMoreInteractions(metricsScope);
