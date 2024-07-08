@@ -50,6 +50,7 @@ import software.amazon.kinesis.metrics.MetricsLevel;
 import software.amazon.kinesis.metrics.MetricsScope;
 import software.amazon.kinesis.metrics.MetricsUtil;
 import software.amazon.kinesis.processor.ShardRecordProcessor;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.RecordsPublisher;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
@@ -258,16 +259,23 @@ public class ShutdownTask implements ConsumerTask {
         // not present in the lease table before creating the lease entry.
         if (childShards.size() == 1) {
             final ChildShard childShard = childShards.get(0);
-            final List<String> parentLeaseKeys = childShard.parentShards().stream()
-                    .map(parentShardId -> ShardInfo.getLeaseKey(shardInfo, parentShardId)).collect(Collectors.toList());
-            if (parentLeaseKeys.size() != 2) {
+            if (childShard.parentShards().size() != 2) {
                 MetricsUtil.addCount(scope, "MissingMergeParent", 1, MetricsLevel.SUMMARY);
                 throw new InvalidStateException("Shard " + shardInfo.shardId() + "'s only child shard " + childShard
                         + " does not contain other parent information.");
             }
+            StreamProcessingMode streamProcessingMode = hierarchicalShardSyncer.getStreamProcessingMode();
+            // In the compatible and upgrade modes, there could be a mix of single-stream and multi-stream leases.
+            // Stream identifier may be missing in ShardInfo in those cases, which is why we pick up stream identifier
+            // from configuration
+            boolean useStreamIdentifier = StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE == streamProcessingMode
+                || StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE == streamProcessingMode;
+            final Optional<String> streamIdentifierSerOpt = useStreamIdentifier
+                ? Optional.of(streamIdentifier.serialize())
+                : shardInfo.streamIdentifierSerOpt();
 
-            final Lease parentLease0 = leaseRefresher.getLease(parentLeaseKeys.get(0));
-            final Lease parentLease1 = leaseRefresher.getLease(parentLeaseKeys.get(1));
+            final Lease parentLease0 = leaseRefresher.getLeaseFromShard(childShard.parentShards().get(0), streamIdentifierSerOpt);
+            final Lease parentLease1 = leaseRefresher.getLeaseFromShard(childShard.parentShards().get(1), streamIdentifierSerOpt);
             if (Objects.isNull(parentLease0) != Objects.isNull(parentLease1)) {
                 MetricsUtil.addCount(scope, "MissingMergeParentLease", 1, MetricsLevel.SUMMARY);
                 final String message = "Shard " + shardInfo.shardId() + "'s only child shard " + childShard +
@@ -286,10 +294,9 @@ public class ShutdownTask implements ConsumerTask {
         }
 
         for (ChildShard childShard : childShards) {
-            final String leaseKey = ShardInfo.getLeaseKey(shardInfo, childShard.shardId());
-            if (leaseRefresher.getLease(leaseKey) == null) {
+            if (leaseRefresher.getLeaseFromShard(childShard.shardId(), shardInfo.streamIdentifierSerOpt()) == null) {
                 log.debug("{} - Shard {} - Attempting to create lease for child shard {}",
-                        shardDetector.streamIdentifier(), shardInfo.shardId(), leaseKey);
+                        shardDetector.streamIdentifier(), shardInfo.shardId(), childShard.shardId());
                 final Lease leaseToCreate = hierarchicalShardSyncer.createLeaseForChildShard(childShard, shardDetector.streamIdentifier());
                 final long startTime = System.currentTimeMillis();
                 boolean success = false;
