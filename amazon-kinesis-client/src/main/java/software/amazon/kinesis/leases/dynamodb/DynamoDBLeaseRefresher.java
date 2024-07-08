@@ -22,6 +22,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -65,6 +67,7 @@ import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseManagementConfig;
 import software.amazon.kinesis.leases.LeaseRefresher;
 import software.amazon.kinesis.leases.LeaseSerializer;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.UpdateField;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
@@ -832,6 +835,25 @@ public class DynamoDBLeaseRefresher implements LeaseRefresher {
         }
 
         log.info("Updated lease without expectation {}.", lease);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Lease getLeaseFromShard(@NonNull final String shardId, @NonNull final Optional<String> streamIdentifierSerOpt)
+            throws DependencyException, InvalidStateException, ProvisionedThroughputException {
+        // If stream identifier is provided then multi-stream lease format is likelier which is why
+        // we add it first. This should ensure that we only look up the lease once when operating
+        // in SingleStreamMode or MultiStreamMode. In SingleStreamCompatibleMode or SingleStreamUpgradeMode,
+        // we may need to look up the lease twice because the lease key format is not deterministic.
+        if (streamIdentifierSerOpt.isPresent()) {
+            Lease lease = getLease(MultiStreamLease.getLeaseKey(streamIdentifierSerOpt.get(), shardId));
+            if (!Objects.isNull(lease)) {
+                return lease;
+            }
+        }
+        return getLease(shardId);
     }
 
     /**

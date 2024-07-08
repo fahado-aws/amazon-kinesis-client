@@ -15,6 +15,7 @@
 package software.amazon.kinesis.leases;
 
 import java.util.List;
+import java.util.Optional;
 
 import software.amazon.kinesis.common.StreamIdentifier;
 import software.amazon.kinesis.leases.exceptions.DependencyException;
@@ -253,6 +254,21 @@ public interface LeaseRefresher {
      * @throws ProvisionedThroughputException
      */
     default void replaceLease(Lease oldLease, Lease newLease)
+            throws DependencyException, InvalidStateException, ProvisionedThroughputException {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Retrieve lease from shard Id and stream identifier. This method is useful when lease key is
+     * not known and can be either one of the two known formats (single-stream or multi-stream).
+     * @param shardId
+     * @param streamIdentifierSerOpt
+     * @return lease
+     * @throws DependencyException
+     * @throws InvalidStateException
+     * @throws ProvisionedThroughputException
+     */
+    default Lease getLeaseFromShard(String shardId, Optional<String> streamIdentifierSerOpt)
             throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         throw new UnsupportedOperationException();
     }
