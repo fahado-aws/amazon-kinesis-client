@@ -58,8 +58,7 @@ public class BlockOnParentShardTask implements ConsumerTask {
         try {
             boolean blockedOnParentShard = false;
             for (String shardId : shardInfo.parentShardIds()) {
-                final String leaseKey = ShardInfo.getLeaseKey(shardInfo, shardId);
-                final Lease lease = leaseRefresher.getLease(leaseKey);
+                final Lease lease = leaseRefresher.getLeaseFromShard(shardId, shardInfo.streamIdentifierSerOpt());
                 if (lease != null) {
                     ExtendedSequenceNumber checkpoint = lease.checkpoint();
                     if ((checkpoint == null) || (!checkpoint.equals(ExtendedSequenceNumber.SHARD_END))) {
