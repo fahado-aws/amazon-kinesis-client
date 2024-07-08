@@ -35,6 +35,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import org.junit.Before;
@@ -72,6 +73,7 @@ import software.amazon.kinesis.metrics.MetricsFactory;
 import software.amazon.kinesis.metrics.NullMetricsFactory;
 import software.amazon.kinesis.processor.Checkpointer;
 import software.amazon.kinesis.processor.ShardRecordProcessor;
+import software.amazon.kinesis.processor.StreamTracker.StreamProcessingMode;
 import software.amazon.kinesis.retrieval.RecordsPublisher;
 import software.amazon.kinesis.retrieval.kpl.ExtendedSequenceNumber;
 
@@ -221,9 +223,9 @@ public class ShutdownTaskTest {
         }
 
         // verify that an attempt was made to retrieve both parents
-        final ArgumentCaptor<String> leaseKeyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(leaseRefresher, times(mergeChild.parentShards().size())).getLease(leaseKeyCaptor.capture());
-        assertEquals(mergeChild.parentShards(), leaseKeyCaptor.getAllValues());
+        final ArgumentCaptor<String> shardIdCaptor = ArgumentCaptor.forClass(String.class);
+        verify(leaseRefresher, times(mergeChild.parentShards().size())).getLeaseFromShard(shardIdCaptor.capture(), eq(Optional.empty()));
+        assertEquals(mergeChild.parentShards(), shardIdCaptor.getAllValues());
 
         verify(leaseCleanupManager, never()).enqueueForDeletion(any(LeasePendingDeletion.class));
         verify(leaseRefresher, never()).updateLeaseWithMetaInfo(any(Lease.class), any(UpdateField.class));
@@ -258,9 +260,48 @@ public class ShutdownTaskTest {
         // verify all parent+child leases were retrieved
         final Set<String> expectedShardIds = new HashSet<>(mergeChild.parentShards());
         expectedShardIds.add(mergeChild.shardId());
-        final ArgumentCaptor<String> leaseKeyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(leaseRefresher, atLeast(expectedShardIds.size())).getLease(leaseKeyCaptor.capture());
-        assertEquals(expectedShardIds, new HashSet<>(leaseKeyCaptor.getAllValues()));
+        final ArgumentCaptor<String> shardIdCaptor = ArgumentCaptor.forClass(String.class);
+        verify(leaseRefresher, atLeast(expectedShardIds.size())).getLeaseFromShard(shardIdCaptor.capture(), eq(Optional.empty()));
+        assertEquals(expectedShardIds, new HashSet<>(shardIdCaptor.getAllValues()));
+
+        verifyShutdownAndNoDrop();
+        verify(shardRecordProcessor).shardEnded(ShardEndedInput.builder().checkpointer(recordProcessorCheckpointer).build());
+    }
+
+    @Test
+    public final void testMergeChildWhereBothParentsHaveLeasesInSingleStreamCompatibleMode() throws Exception {
+        // the @Before test setup makes the `SHARD_ID` parent accessible
+        final ChildShard mergeChild = constructChildFromMerge();
+        // make second parent accessible
+        setupLease(mergeChild.parentShards().get(1), Collections.emptyList());
+
+        final Lease mockChildLease = mock(Lease.class);
+        when(hierarchicalShardSyncer.createLeaseForChildShard(mergeChild, STREAM_IDENTIFIER))
+                .thenReturn(mockChildLease);
+        when(hierarchicalShardSyncer.getStreamProcessingMode())
+                .thenReturn(StreamProcessingMode.SINGLE_STREAM_COMPATIBLE_MODE);
+
+        final TaskResult result = createShutdownTask(SHARD_END, Collections.singletonList(mergeChild)).call();
+
+        assertNull(result.getException());
+        verify(leaseCleanupManager).enqueueForDeletion(any(LeasePendingDeletion.class));
+
+        final ArgumentCaptor<Lease> updateLeaseCaptor = ArgumentCaptor.forClass(Lease.class);
+        verify(leaseRefresher).updateLeaseWithMetaInfo(updateLeaseCaptor.capture(), eq(UpdateField.CHILD_SHARDS));
+        final Lease updatedLease = updateLeaseCaptor.getValue();
+        assertEquals(SHARD_ID, updatedLease.leaseKey());
+        assertEquals(Collections.singleton(mergeChild.shardId()), updatedLease.childShardIds());
+
+        verify(leaseRefresher).createLeaseIfNotExists(mockChildLease);
+
+        // Verify that leases for parent shards were retrieved with stream identifier
+        verify(leaseRefresher, times(1)).getLeaseFromShard(eq(mergeChild.parentShards().get(0)),
+            eq(Optional.of(STREAM_IDENTIFIER.serialize())));
+        verify(leaseRefresher, times(1)).getLeaseFromShard(eq(mergeChild.parentShards().get(1)),
+            eq(Optional.of(STREAM_IDENTIFIER.serialize())));
+        // Verify that lease for child shard was retrieved. Stream identifier is not expected for a single-stream lease
+        verify(leaseRefresher, atLeast(1)).getLeaseFromShard(eq(mergeChild.shardId()),
+            eq(Optional.empty()));
 
         verifyShutdownAndNoDrop();
         verify(shardRecordProcessor).shardEnded(ShardEndedInput.builder().checkpointer(recordProcessorCheckpointer).build());
@@ -336,6 +377,7 @@ public class ShutdownTaskTest {
         final Lease lease = LeaseHelper.createLease(leaseKey, "leaseOwner", parentShardIds);
         when(leaseCoordinator.getCurrentlyHeldLease(lease.leaseKey())).thenReturn(lease);
         when(leaseRefresher.getLease(lease.leaseKey())).thenReturn(lease);
+        when(leaseRefresher.getLeaseFromShard(lease.leaseKey(), Optional.empty())).thenReturn(lease);
         return lease;
     }
 

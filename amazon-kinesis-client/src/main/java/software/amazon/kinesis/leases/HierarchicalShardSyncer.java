@@ -31,6 +31,7 @@ import java.util.stream.Collectors;
 import com.google.common.annotations.VisibleForTesting;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.Accessors;
 import org.apache.commons.lang3.StringUtils;
@@ -78,6 +79,7 @@ public class HierarchicalShardSyncer {
 
     private final DeletedStreamListProvider deletedStreamListProvider;
 
+    @Getter
     private final StreamProcessingMode streamProcessingMode;
 
     private final boolean createMultiStreamLease;
