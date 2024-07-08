@@ -22,6 +22,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -60,7 +61,7 @@ public class BlockOnParentShardTaskTest {
     public final void testCallNoParents()
         throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         LeaseRefresher leaseRefresher = mock(LeaseRefresher.class);
-        when(leaseRefresher.getLease(shardId)).thenReturn(null);
+        when(leaseRefresher.getLeaseFromShard(shardId, Optional.empty())).thenReturn(null);
 
         BlockOnParentShardTask task = new BlockOnParentShardTask(shardInfo, leaseRefresher, backoffTimeInMillis);
         TaskResult result = task.call();
@@ -89,8 +90,8 @@ public class BlockOnParentShardTaskTest {
         parent2Lease.checkpoint(ExtendedSequenceNumber.SHARD_END);
 
         LeaseRefresher leaseRefresher = mock(LeaseRefresher.class);
-        when(leaseRefresher.getLease(parent1ShardId)).thenReturn(parent1Lease);
-        when(leaseRefresher.getLease(parent2ShardId)).thenReturn(parent2Lease);
+        when(leaseRefresher.getLeaseFromShard(parent1ShardId, Optional.empty())).thenReturn(parent1Lease);
+        when(leaseRefresher.getLeaseFromShard(parent2ShardId, Optional.empty())).thenReturn(parent2Lease);
 
         // test single parent
         parentShardIds.add(parent1ShardId);
@@ -118,8 +119,6 @@ public class BlockOnParentShardTaskTest {
             throws DependencyException, InvalidStateException, ProvisionedThroughputException {
         ShardInfo shardInfo = null;
         BlockOnParentShardTask task = null;
-        String parent1LeaseKey = streamId + ":" + "shardId-1";
-        String parent2LeaseKey = streamId + ":" + "shardId-2";
         String parent1ShardId = "shardId-1";
         String parent2ShardId = "shardId-2";
         List<String> parentShardIds = new ArrayList<>();
@@ -131,8 +130,8 @@ public class BlockOnParentShardTaskTest {
         parent2Lease.checkpoint(ExtendedSequenceNumber.SHARD_END);
 
         LeaseRefresher leaseRefresher = mock(LeaseRefresher.class);
-        when(leaseRefresher.getLease(parent1LeaseKey)).thenReturn(parent1Lease);
-        when(leaseRefresher.getLease(parent2LeaseKey)).thenReturn(parent2Lease);
+        when(leaseRefresher.getLeaseFromShard(parent1ShardId, Optional.of(streamId))).thenReturn(parent1Lease);
+        when(leaseRefresher.getLeaseFromShard(parent2ShardId, Optional.of(streamId))).thenReturn(parent2Lease);
 
         // test single parent
         parentShardIds.add(parent1ShardId);
@@ -173,8 +172,8 @@ public class BlockOnParentShardTaskTest {
         parent2Lease.checkpoint(new ExtendedSequenceNumber("98182584034"));
 
         LeaseRefresher leaseRefresher = mock(LeaseRefresher.class);
-        when(leaseRefresher.getLease(parent1ShardId)).thenReturn(parent1Lease);
-        when(leaseRefresher.getLease(parent2ShardId)).thenReturn(parent2Lease);
+        when(leaseRefresher.getLeaseFromShard(parent1ShardId, Optional.empty())).thenReturn(parent1Lease);
+        when(leaseRefresher.getLeaseFromShard(parent2ShardId, Optional.empty())).thenReturn(parent2Lease);
 
         // test single parent
         parentShardIds.add(parent1ShardId);
@@ -203,8 +202,6 @@ public class BlockOnParentShardTaskTest {
 
         ShardInfo shardInfo = null;
         BlockOnParentShardTask task = null;
-        String parent1LeaseKey = streamId + ":" + "shardId-1";
-        String parent2LeaseKey = streamId + ":" + "shardId-2";
         String parent1ShardId = "shardId-1";
         String parent2ShardId = "shardId-2";
         List<String> parentShardIds = new ArrayList<>();
@@ -217,8 +214,8 @@ public class BlockOnParentShardTaskTest {
         parent2Lease.checkpoint(new ExtendedSequenceNumber("98182584034"));
 
         LeaseRefresher leaseRefresher = mock(LeaseRefresher.class);
-        when(leaseRefresher.getLease(parent1LeaseKey)).thenReturn(parent1Lease);
-        when(leaseRefresher.getLease(parent2LeaseKey)).thenReturn(parent2Lease);
+        when(leaseRefresher.getLeaseFromShard(parent1ShardId, Optional.of(streamId))).thenReturn(parent1Lease);
+        when(leaseRefresher.getLeaseFromShard(parent2ShardId, Optional.of(streamId))).thenReturn(parent2Lease);
 
         // test single parent
         parentShardIds.add(parent1ShardId);
@@ -253,7 +250,7 @@ public class BlockOnParentShardTaskTest {
         TaskResult result = null;
         Lease parentLease = new Lease();
         LeaseRefresher leaseRefresher = mock(LeaseRefresher.class);
-        when(leaseRefresher.getLease(parentShardId)).thenReturn(parentLease);
+        when(leaseRefresher.getLeaseFromShard(parentShardId, Optional.empty())).thenReturn(parentLease);
 
         // test when parent shard has not yet been fully processed
         parentLease.checkpoint(new ExtendedSequenceNumber("98182584034"));
