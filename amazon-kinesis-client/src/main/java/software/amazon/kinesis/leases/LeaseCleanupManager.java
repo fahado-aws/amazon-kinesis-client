@@ -45,7 +45,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.stream.Collectors;
 
 /**
  * Helper class to cleanup of any expired/closed shard leases. It will cleanup leases periodically as defined by
@@ -254,7 +253,7 @@ public class LeaseCleanupManager {
     private boolean allParentShardLeasesDeleted(Lease lease, ShardInfo shardInfo)
             throws DependencyException, ProvisionedThroughputException, InvalidStateException {
         for (String parentShard : lease.parentShardIds()) {
-            final Lease parentLease = leaseCoordinator.leaseRefresher().getLease(ShardInfo.getLeaseKey(shardInfo, parentShard));
+            final Lease parentLease = leaseCoordinator.leaseRefresher().getLeaseFromShard(parentShard, shardInfo.streamIdentifierSerOpt());
 
             if (parentLease != null) {
                 log.warn("Lease {} has a parent lease {} which is still present in the lease table, skipping deletion " +
@@ -270,24 +269,26 @@ public class LeaseCleanupManager {
     // 2. Its parent shard lease(s) have already been deleted.
     private boolean cleanupLeaseForCompletedShard(Lease lease, ShardInfo shardInfo, Set<String> childShardKeys)
             throws DependencyException, ProvisionedThroughputException, InvalidStateException, IllegalStateException {
-        final Set<String> processedChildShardLeaseKeys = new HashSet<>();
-        final Set<String> childShardLeaseKeys = childShardKeys.stream().map(ck -> ShardInfo.getLeaseKey(shardInfo, ck))
-                .collect(Collectors.toSet());
+        final Set<String> processedChildShardKeys = new HashSet<>();
 
-        for (String childShardLeaseKey : childShardLeaseKeys) {
+        for (String childShardKey : childShardKeys) {
             final Lease childShardLease = Optional.ofNullable(
-                    leaseCoordinator.leaseRefresher().getLease(childShardLeaseKey))
+                    leaseCoordinator.leaseRefresher().getLeaseFromShard(childShardKey, shardInfo.streamIdentifierSerOpt()))
                     .orElseThrow(() -> new IllegalStateException(
-                            "Child lease " + childShardLeaseKey + " for completed shard not found in "
+                            "Lease of shard " + childShardKey + ", which is a child of completed shard not found in "
                                     + "lease table - not cleaning up lease " + lease));
 
             if (!childShardLease.checkpoint().equals(ExtendedSequenceNumber.TRIM_HORIZON) && !childShardLease
                     .checkpoint().equals(ExtendedSequenceNumber.AT_TIMESTAMP)) {
-                processedChildShardLeaseKeys.add(childShardLease.leaseKey());
+                if (childShardLease instanceof MultiStreamLease) {
+                    processedChildShardKeys.add(((MultiStreamLease) childShardLease).shardId());
+                } else {
+                    processedChildShardKeys.add(childShardLease.leaseKey());
+                }
             }
         }
 
-        if (!allParentShardLeasesDeleted(lease, shardInfo) || !Objects.equals(childShardLeaseKeys, processedChildShardLeaseKeys)) {
+        if (!allParentShardLeasesDeleted(lease, shardInfo) || !Objects.equals(childShardKeys, processedChildShardKeys)) {
             return false;
         }
 

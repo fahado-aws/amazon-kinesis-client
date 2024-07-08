@@ -17,6 +17,7 @@ package software.amazon.kinesis.leases.dynamodb;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
@@ -28,6 +29,7 @@ import software.amazon.awssdk.services.kinesis.model.HashKeyRange;
 import software.amazon.kinesis.common.HashKeyRangeForLease;
 import software.amazon.kinesis.leases.Lease;
 import software.amazon.kinesis.leases.LeaseIntegrationTest;
+import software.amazon.kinesis.leases.MultiStreamLease;
 import software.amazon.kinesis.leases.UpdateField;
 import software.amazon.kinesis.leases.exceptions.InvalidStateException;
 import software.amazon.kinesis.leases.exceptions.LeasingException;
@@ -392,5 +394,33 @@ public class DynamoDBLeaseRefresherIntegrationTest extends LeaseIntegrationTest 
         assertEquals(renewedLease, persistedOldLease);
         Lease persistedNewLease = leaseRefresher.getLease(newLease.leaseKey());
         assertNull(persistedNewLease);
+    }
+
+    @Test
+    public void testGetLeaseFromShard_ReturnsCorrectSingleStreamLease() throws LeasingException {
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        String shardId = "1";
+        String stream = "stream-1";
+        Lease lease = builder.withLease(shardId).build().get(shardId);
+
+        Lease leaseFromShard1 = leaseRefresher.getLeaseFromShard(shardId, Optional.empty());
+        Lease leaseFromShard2 = leaseRefresher.getLeaseFromShard(shardId, Optional.of(stream));
+
+        assertEquals(lease, leaseFromShard1);
+        assertEquals(lease, leaseFromShard2);
+    }
+
+    @Test
+    public void testGetLeaseFromShard_ReturnsCorrectMultiStreamLease() throws LeasingException {
+        TestHarnessBuilder builder = new TestHarnessBuilder(leaseRefresher);
+        String shardId = "1";
+        String stream = "stream-1";
+        Lease lease = builder.withMultiStreamLease(shardId, stream).build().get(MultiStreamLease.getLeaseKey(stream, shardId));
+
+        Lease leaseFromShard1 = leaseRefresher.getLeaseFromShard(shardId, Optional.empty());
+        Lease leaseFromShard2 = leaseRefresher.getLeaseFromShard(shardId, Optional.of(stream));
+
+        assertEquals(null, leaseFromShard1);
+        assertEquals(lease, leaseFromShard2);
     }
 }

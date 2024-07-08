@@ -33,6 +33,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
@@ -241,21 +242,18 @@ public class LeaseCleanupManagerTest {
                                                                      int expectedDeletedLeases) throws Exception {
         final Lease lease = LeaseHelper.createLease(shardInfo.shardId(), "leaseOwner", shardInfo.parentShardIds(),
                 childShards.stream().map(ChildShard::shardId).collect(Collectors.toSet()));
-        final List<Lease> childShardLeases = childShards.stream().map(c -> LeaseHelper.createLease(
-                ShardInfo.getLeaseKey(shardInfo, c.shardId()), "leaseOwner",  Collections.singleton(shardInfo.shardId()),
-                Collections.emptyList(), extendedSequenceNumber)).collect(Collectors.toList());
-
-        final List<Lease> parentShardLeases = lease.parentShardIds().stream().map(p ->
-                LeaseHelper.createLease(ShardInfo.getLeaseKey(shardInfo, p), "leaseOwner",  Collections.emptyList(),
-                        Collections.singleton(shardInfo.shardId()), extendedSequenceNumber)).collect(Collectors.toList());
 
         when(leaseRefresher.getLease(lease.leaseKey())).thenReturn(lease);
-        for (Lease parentShardLease : parentShardLeases) {
-            when(leaseRefresher.getLease(parentShardLease.leaseKey())).thenReturn(parentShardLease);
+        for (String parentShardId : lease.parentShardIds()) {
+            Lease parentShardLease = LeaseHelper.createLease(ShardInfo.getLeaseKey(shardInfo, parentShardId), "leaseOwner",  Collections.emptyList(),
+            Collections.singleton(shardInfo.shardId()), extendedSequenceNumber);
+            when(leaseRefresher.getLeaseFromShard(parentShardId, Optional.empty())).thenReturn(parentShardLease);
         }
         if (childShardLeasesPresent) {
-            for (Lease childShardLease : childShardLeases) {
-                when(leaseRefresher.getLease(childShardLease.leaseKey())).thenReturn(childShardLease);
+            for (ChildShard childShard : childShards) {
+                Lease childShardLease = LeaseHelper.createLease(ShardInfo.getLeaseKey(shardInfo, childShard.shardId()), "leaseOwner",
+                    Collections.singleton(shardInfo.shardId()), Collections.emptyList(), extendedSequenceNumber);
+                when(leaseRefresher.getLeaseFromShard(childShard.shardId(), Optional.empty())).thenReturn(childShardLease);
             }
         }
 
