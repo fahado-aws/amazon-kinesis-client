@@ -1240,6 +1240,7 @@ public class SchedulerTest {
         verify(metricsScope).addData("SingleStreamCompatibleMode", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addData("SingleStreamUpgradeMode", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addData("MultiStreamMode", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
+        verify(metricsScope).addData(RetrievalConfig.KINESIS_CLIENT_LIB_USER_AGENT_VERSION, 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope).addDimension("WorkerIdentifier", "workerIdentifier");
         verify(metricsScope).end();
         verifyNoMoreInteractions(metricsScope);

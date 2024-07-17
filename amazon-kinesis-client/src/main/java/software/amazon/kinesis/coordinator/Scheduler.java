@@ -1118,6 +1118,8 @@ public class Scheduler implements Runnable {
                 (StreamProcessingMode.MULTI_STREAM_MODE == streamProcessingMode) ? 1 : 0,
                 MetricsLevel.DETAILED);
             MetricsUtil.addWorkerIdentifier(metricsScope, leaseManagementConfig.workerIdentifier());
+            MetricsUtil.addCount(metricsScope, RetrievalConfig.KINESIS_CLIENT_LIB_USER_AGENT_VERSION, 1,
+                MetricsLevel.DETAILED);
             MetricsUtil.endScope(metricsScope);
             emitWorkerMetricsWatch.reset().start();
         }
