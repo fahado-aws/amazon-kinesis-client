@@ -171,7 +171,7 @@ public class DynamoDBLeaseRenewerTest {
         Lease lease1 = newLease("1");
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
-        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        MultiStreamLease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
         doReturn(true).when(leaseRefresher).renewLease(expectedMultiStreamLease);
         doReturn(true).when(leaseRefresher).renewLease(lease2);
         doReturn(expectedMultiStreamLease).when(leaseRefresher).getLease(eq(expectedMultiStreamLease.leaseKey()));
@@ -188,9 +188,11 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
         assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", lease1.leaseKey());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "AuditUpgradedLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", expectedMultiStreamLease.shardId());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
@@ -217,7 +219,7 @@ public class DynamoDBLeaseRenewerTest {
         Lease lease1 = newLease("1");
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
-        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        MultiStreamLease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
         doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
         doReturn(leases).when(leaseRefresher).listLeases();
         doReturn(expectedMultiStreamLease).when(leaseRefresher).getLease(eq(expectedMultiStreamLease.leaseKey()));
@@ -233,9 +235,11 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
         assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", lease1.leaseKey());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "AuditUpgradedLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", expectedMultiStreamLease.shardId());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
@@ -329,6 +333,7 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(0, currentLeases.size());
         verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        verify(metricsScope, times(1)).addDimension("ShardId", lease1.leaseKey());
         verify(metricsScope, times(1)).addData("Success", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
@@ -352,7 +357,7 @@ public class DynamoDBLeaseRenewerTest {
         Lease lease1 = newLease("1");
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
-        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        MultiStreamLease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
         doThrow(InvalidStateException.class).when(leaseRefresher).getLease(eq(expectedMultiStreamLease.leaseKey()));
         doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
         doReturn(leases).when(leaseRefresher).listLeases();
@@ -365,9 +370,11 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(1, currentLeases.size());
         verify(leaseRefresher, times(1)).replaceLease(eq(lease1), eq(expectedMultiStreamLease));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", lease1.leaseKey());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "AuditUpgradedLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", expectedMultiStreamLease.shardId());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
@@ -394,7 +401,7 @@ public class DynamoDBLeaseRenewerTest {
         Lease lease1 = newLease("1");
         Lease lease2 = newMultiStreamLease("2");
         List<Lease> leases = Arrays.asList(lease1, lease2);
-        Lease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
+        MultiStreamLease expectedMultiStreamLease = renewer.convertToMultiStreamLease(lease1);
         doReturn(true).when(leaseRefresher).renewLease(any(Lease.class));
         doReturn(leases).when(leaseRefresher).listLeases();
         doReturn(lease1).when(leaseRefresher).getLease(eq(expectedMultiStreamLease.leaseKey()));
@@ -410,9 +417,11 @@ public class DynamoDBLeaseRenewerTest {
         assertEquals(expectedMultiStreamLease, currentLeases.get(expectedMultiStreamLease.leaseKey()));
         assertEquals(lease2, currentLeases.get(lease2.leaseKey()));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "UpgradeLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", lease1.leaseKey());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 1, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
         orderVerifier.verify(metricsScope, times(1)).addDimension("Operation", "AuditUpgradedLease");
+        orderVerifier.verify(metricsScope, times(1)).addDimension("ShardId", expectedMultiStreamLease.shardId());
         orderVerifier.verify(metricsScope, times(1)).addData("Success", 0, StandardUnit.COUNT, MetricsLevel.DETAILED);
         orderVerifier.verify(metricsScope, times(1)).addData(eq("Time"), anyDouble(), eq(StandardUnit.MILLISECONDS), eq(MetricsLevel.DETAILED));
     }
