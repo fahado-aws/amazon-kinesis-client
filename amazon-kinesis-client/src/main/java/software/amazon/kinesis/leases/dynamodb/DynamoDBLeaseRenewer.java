@@ -414,10 +414,15 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
 
             if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE
                 && !(lease instanceof MultiStreamLease)) {
+                // Upgrading lease to the multi-stream format
                 MultiStreamLease multiStreamLease = upgradeLease(lease);
+                // Adding new lease and removing old lease from the in-memory map of owned leases
                 multiStreamLease.concurrencyToken(UUID.randomUUID());
                 ownedLeases.put(multiStreamLease.leaseKey(), multiStreamLease);
                 ownedLeases.remove(lease.leaseKey());
+                // Auditing the newly created multi-stream lease. We do this as an extra validation
+                // step to ensure that no corruption happened on the way to DDB. So we read back and
+                // reconstruct the MultiStreamLease object.
                 auditUpgradedLease(multiStreamLease);
             } else {
                 Lease authoritativeLease = lease.copy();
@@ -496,6 +501,7 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
     private MultiStreamLease upgradeLease(final Lease lease) throws DependencyException, InvalidStateException,
         ProvisionedThroughputException {
         final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, UPGRADE_LEASE_OPERATION);
+        MetricsUtil.addShardId(metricsScope, lease.leaseKey());
         final long startTime = System.currentTimeMillis();
         MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
         boolean success = false;
@@ -512,6 +518,7 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
     private void auditUpgradedLease(final MultiStreamLease multiStreamLease) throws DependencyException, InvalidStateException,
         ProvisionedThroughputException {
         final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, AUDIT_UPGRADED_LEASE_OPERATION);
+        MetricsUtil.addShardId(metricsScope, multiStreamLease.shardId());
         final long startTime = System.currentTimeMillis();
         boolean success = false;
         try {
