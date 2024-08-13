@@ -63,6 +63,7 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
     private static final int RENEWAL_RETRIES = 2;
     private static final String RENEW_ALL_LEASES_DIMENSION = "RenewAllLeases";
     private static final String UPGRADE_LEASE_OPERATION = "UpgradeLease";
+    private static final String AUDIT_UPGRADED_LEASE_OPERATION = "AuditUpgradedLease";
 
     private final LeaseRefresher leaseRefresher;
     private final String workerIdentifier;
@@ -413,20 +414,11 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
 
             if (streamProcessingMode == StreamProcessingMode.SINGLE_STREAM_UPGRADE_MODE
                 && !(lease instanceof MultiStreamLease)) {
-                final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, UPGRADE_LEASE_OPERATION);
-                final long startTime = System.currentTimeMillis();
-                MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
-                boolean success = false;
-                try {
-                    leaseRefresher.replaceLease(lease, multiStreamLease);
-                    success = true;
-                } finally {
-                    MetricsUtil.addSuccessAndLatency(metricsScope, success, startTime, MetricsLevel.DETAILED);
-                    MetricsUtil.endScope(metricsScope);
-                }
+                MultiStreamLease multiStreamLease = upgradeLease(lease);
                 multiStreamLease.concurrencyToken(UUID.randomUUID());
                 ownedLeases.put(multiStreamLease.leaseKey(), multiStreamLease);
                 ownedLeases.remove(lease.leaseKey());
+                auditUpgradedLease(multiStreamLease);
             } else {
                 Lease authoritativeLease = lease.copy();
 
@@ -499,6 +491,36 @@ public class DynamoDBLeaseRenewer implements LeaseRenewer {
         multiStreamLease.streamIdentifier(streamConfig.streamIdentifier().serialize());
         multiStreamLease.shardId(lease.leaseKey());
         return multiStreamLease;
+    }
+
+    private MultiStreamLease upgradeLease(final Lease lease) throws DependencyException, InvalidStateException,
+        ProvisionedThroughputException {
+        final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, UPGRADE_LEASE_OPERATION);
+        final long startTime = System.currentTimeMillis();
+        MultiStreamLease multiStreamLease = convertToMultiStreamLease(lease);
+        boolean success = false;
+        try {
+            leaseRefresher.replaceLease(lease, multiStreamLease);
+            success = true;
+        } finally {
+            MetricsUtil.addSuccessAndLatency(metricsScope, success, startTime, MetricsLevel.DETAILED);
+            MetricsUtil.endScope(metricsScope);
+        }
+        return multiStreamLease;
+    }
+
+    private void auditUpgradedLease(final MultiStreamLease multiStreamLease) throws DependencyException, InvalidStateException,
+        ProvisionedThroughputException {
+        final MetricsScope metricsScope = MetricsUtil.createMetricsWithOperation(metricsFactory, AUDIT_UPGRADED_LEASE_OPERATION);
+        final long startTime = System.currentTimeMillis();
+        boolean success = false;
+        try {
+            Lease upgradedLease = leaseRefresher.getLease(multiStreamLease.leaseKey());
+            success = upgradedLease instanceof MultiStreamLease;
+        } finally {
+            MetricsUtil.addSuccessAndLatency(metricsScope, success, startTime, MetricsLevel.DETAILED);
+            MetricsUtil.endScope(metricsScope);
+        }
     }
 
 
